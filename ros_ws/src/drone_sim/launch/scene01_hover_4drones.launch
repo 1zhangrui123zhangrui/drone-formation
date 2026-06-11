@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- S1: 四机定点悬停 (60s) -->
+  <arg name="gui" default="false"/>
+  <arg name="z_target" default="1.8"/>
+
+  <include file="$(find drone_sim)/launch/spawn_4drones.launch">
+    <arg name="gui" value="$(arg gui)"/>
+  </include>
+
+  <rosparam command="load" file="$(find drone_sim)/config/teacher_params.yaml"/>
+
+  <node name="scene_driver" pkg="drone_sim" type="scene_driver.py" output="screen">
+    <param name="scenario" value="hover"/>
+    <param name="z_target" value="$(arg z_target)"/>
+    <param name="num_drones" value="4"/>
+    <param name="formation_size" value="0.5"/>
+    <param name="rate" value="10"/>
+  </node>
+
+  <node name="teacher_controller" pkg="drone_sim" type="teacher_controller.py" output="screen">
+    <param name="rate" value="10"/>
+    <param name="num_drones" value="4"/>
+  </node>
+
+  <node name="enable_motors_delayed" pkg="drone_sim" type="enable_motors_delayed.py" output="screen">
+    <param name="num_drones" value="4"/>
+  </node>
+</launch>

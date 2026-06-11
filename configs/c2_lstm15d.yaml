@@ -1,0 +1,15 @@
+controller_name: c2_lstm15d
+controller_type: lstm
+description: Extended-input LSTM controller using 15D fused state features.
+model_path: data/trained_models/c2_lstm15d.mat
+input_dim: 15
+hidden_dim: 192
+output_dim: 4
+sequence_length: 20
+sample_time: 0.02
+topics:
+  state_topic: /formation/state
+  command_topic: /formation/cmd
+normalization:
+  enabled: true
+  stats_file: data/processed/normalization_stats.mat

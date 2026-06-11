@@ -1,0 +1,15 @@
+controller_name: c1_lstm9d
+controller_type: lstm
+description: Single-direction LSTM controller using 9D state input.
+model_path: data/trained_models/c1_lstm9d.mat
+input_dim: 9
+hidden_dim: 128
+output_dim: 4
+sequence_length: 20
+sample_time: 0.02
+topics:
+  state_topic: /formation/state
+  command_topic: /formation/cmd
+normalization:
+  enabled: true
+  stats_file: data/processed/normalization_stats.mat

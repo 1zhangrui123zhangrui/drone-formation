@@ -1,0 +1,16 @@
+controller_name: c3_bidir_attn
+controller_type: bidir_lstm_attention
+description: Bidirectional LSTM with attention for end-to-end formation control.
+model_path: data/trained_models/c3_bidir_attn.mat
+input_dim: 15
+hidden_dim: 256
+attention_dim: 128
+output_dim: 4
+sequence_length: 30
+sample_time: 0.02
+topics:
+  state_topic: /formation/state
+  command_topic: /formation/cmd
+normalization:
+  enabled: true
+  stats_file: data/processed/normalization_stats.mat

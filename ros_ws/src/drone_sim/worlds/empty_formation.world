@@ -1,0 +1,37 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="empty_formation_world">
+    <!-- 仅保留光源 + 地面,删除其他所有元素以减轻 Iris Xe 渲染负担 -->
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- 物理引擎降频到 250 Hz,大幅缓解 CPU 压力,对 10 Hz 控制无影响 -->
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_update_rate>250</real_time_update_rate>
+      <real_time_factor>1</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>50</iters>
+        </solver>
+      </ode>
+    </physics>
+    
+    <world name="empty_formation_world">
+  <!-- 禁用 Gazebo Fuel 在线模型下载 -->
+  <plugin name="default_world" filename="libgazebo_world_plugin.so">
+    <download_fuel_resources>false</download_fuel_resources>
+  </plugin>
+  ...
+</world>
+
+    <!-- 关闭阴影、网格、云,只保留必要 -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>0</shadows>
+      <grid>0</grid>
+    </scene>
+  </world>
+</sdf>

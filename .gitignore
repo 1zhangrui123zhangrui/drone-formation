@@ -1,0 +1,64 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.hypothesis/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Conda / local environments
+.conda/
+conda-meta/
+
+# ROS / catkin
+.catkin_tools/
+.ros/
+log/
+logs/
+ros_ws/build/
+ros_ws/devel/
+ros_ws/install/
+
+# MATLAB / Simulink
+*.asv
+*.autosave
+*.m~
+*.mex*
+*.mlx.autosave
+*.slxc
+slprj/
+codegen/
+
+# Experiment data and model artifacts
+data/raw_bags/
+data/processed/raw/
+data/processed/interim/
+data/processed/cache/
+data/trained_models/
+
+# Generated experiment outputs
+results/run_*/
+results/logs/
+results/tmp/
+results/cache/
+
+# Archives and local dumps
+*.bag.active
+*.bak
+*.tmp

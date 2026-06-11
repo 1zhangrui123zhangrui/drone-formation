@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  drone-formation-e2e:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        GAZEBO_VERSION: "11"
+        MATLAB_RELEASE: "R2023b"
+    container_name: drone-formation-e2e
+    network_mode: host
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/drone-formation-e2e
+    volumes:
+      - ..:/workspace/drone-formation-e2e
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_MASTER_URI=http://localhost:11311
+      - GAZEBO_MASTER_URI=http://localhost:11345

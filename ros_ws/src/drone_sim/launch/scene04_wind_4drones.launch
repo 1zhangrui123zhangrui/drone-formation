@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- S4: S2 圆形 + 风场扰动 (90s) -->
+  <arg name="gui" default="false"/>
+  <arg name="radius" default="3.0"/>
+  <arg name="omega" default="0.2"/>
+  <arg name="z_target" default="1.8"/>
+  <arg name="wind_seed" default="42"/>
+
+  <include file="$(find drone_sim)/launch/spawn_4drones.launch">
+    <arg name="gui" value="$(arg gui)"/>
+  </include>
+
+  <rosparam command="load" file="$(find drone_sim)/config/teacher_params.yaml"/>
+
+  <node name="scene_driver" pkg="drone_sim" type="scene_driver.py" output="screen">
+    <param name="scenario" value="circle"/>
+    <param name="radius" value="$(arg radius)"/>
+    <param name="omega" value="$(arg omega)"/>
+    <param name="z_target" value="$(arg z_target)"/>
+    <param name="num_drones" value="4"/>
+    <param name="formation_size" value="0.5"/>
+    <param name="rate" value="10"/>
+  </node>
+
+  <node name="teacher_controller" pkg="drone_sim" type="teacher_controller.py" output="screen">
+    <param name="rate" value="10"/>
+    <param name="num_drones" value="4"/>
+  </node>
+
+  <node name="enable_motors_delayed" pkg="drone_sim" type="enable_motors_delayed.py" output="screen">
+    <param name="num_drones" value="4"/>
+  </node>
+
+  <!-- 风场扰动节点 -->
+  <node name="wind_driver" pkg="drone_sim" type="wind_driver.py" output="screen">
+    <param name="num_drones" value="4"/>
+    <param name="v_mean_x" value="2.0"/>
+    <param name="v_mean_y" value="0.0"/>
+    <param name="amplitude" value="1.0"/>
+    <param name="frequency" value="0.5"/>
+    <param name="phase" value="1.5707963"/>
+    <param name="sigma" value="0.3"/>
+    <param name="k_wind" value="0.3"/>
+    <param name="rate" value="10"/>
+    <param name="startup_wait" value="10.0"/>
+    <param name="seed" value="$(arg wind_seed)"/>
+  </node>
+</launch>

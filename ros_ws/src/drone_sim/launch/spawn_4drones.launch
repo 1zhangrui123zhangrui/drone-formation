@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 4 机基础 spawn 框架,通过 group ns 隔离 -->
+  <arg name="gui" default="false"/>
+
+  <!-- 1. 启动 Gazebo 空场景 -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find drone_sim)/worlds/empty_formation.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="headless" value="false"/>
+  </include>
+
+  <!-- 2. spawn 4 架机,各自独立 namespace -->
+  <group ns="drone1">
+    <include file="$(find hector_quadrotor_gazebo)/launch/spawn_quadrotor.launch">
+      <arg name="name" value="drone1"/>
+      <arg name="tf_prefix" value="drone1"/>
+      <arg name="x" value="0.5"/>
+      <arg name="y" value="0.5"/>
+      <arg name="z" value="0.3"/>
+    </include>
+  </group>
+
+  <group ns="drone2">
+    <include file="$(find hector_quadrotor_gazebo)/launch/spawn_quadrotor.launch">
+      <arg name="name" value="drone2"/>
+      <arg name="tf_prefix" value="drone2"/>
+      <arg name="x" value="-0.5"/>
+      <arg name="y" value="0.5"/>
+      <arg name="z" value="0.3"/>
+    </include>
+  </group>
+
+  <group ns="drone3">
+    <include file="$(find hector_quadrotor_gazebo)/launch/spawn_quadrotor.launch">
+      <arg name="name" value="drone3"/>
+      <arg name="tf_prefix" value="drone3"/>
+      <arg name="x" value="-0.5"/>
+      <arg name="y" value="-0.5"/>
+      <arg name="z" value="0.3"/>
+    </include>
+  </group>
+
+  <group ns="drone4">
+    <include file="$(find hector_quadrotor_gazebo)/launch/spawn_quadrotor.launch">
+      <arg name="name" value="drone4"/>
+      <arg name="tf_prefix" value="drone4"/>
+      <arg name="x" value="0.5"/>
+      <arg name="y" value="-0.5"/>
+      <arg name="z" value="0.3"/>
+    </include>
+  </group>
+</launch>

@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="gui" default="false"/>
+  <arg name="radius" default="3.0"/>
+  <arg name="omega" default="0.4"/>
+  <arg name="z_target" default="1.8"/>
+
+  <!-- 1. 启动 Gazebo,加载精简空场景 -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find drone_sim)/worlds/empty_formation.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="headless" value="false"/>
+  </include>
+
+  <!-- 2. spawn 单架 hector_quadrotor -->
+  <include file="$(find hector_quadrotor_gazebo)/launch/spawn_quadrotor.launch">
+    <arg name="name" value="quadrotor"/>
+    <arg name="model" value="$(find hector_quadrotor_description)/urdf/quadrotor.gazebo.xacro"/>
+    <arg name="x" value="$(arg radius)"/>
+    <arg name="y" value="0.0"/>
+    <arg name="z" value="0.3"/>
+  </include>
+
+  <!-- 3. 加载 Teacher 参数 -->
+  <rosparam command="load" file="$(find drone_sim)/config/teacher_params.yaml"/>
+
+  <!-- 4. 任务驱动器 -->
+  <node name="scene_driver" pkg="drone_sim" type="scene_driver.py" output="screen">
+    <param name="scenario" value="circle"/>
+    <param name="radius" value="$(arg radius)"/>
+    <param name="omega" value="$(arg omega)"/>
+    <param name="z_target" value="$(arg z_target)"/>
+    <param name="rate" value="10"/>
+     <param name="num_drones" value="1"/>   <!-- 新增 -->
+  </node>
+
+  <!-- 5. Teacher 控制器 -->
+  <node name="teacher_controller" pkg="drone_sim" type="teacher_controller.py" output="screen">
+    <param name="rate" value="10"/>
+      <param name="num_drones" value="1"/>   <!-- 新增 -->
+  </node>
+
+  <!-- 6. 延时使能电机 -->
+  <node name="enable_motors_delayed" pkg="drone_sim" type="enable_motors_delayed.py" output="screen"/>
+</launch>

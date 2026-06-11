@@ -1,0 +1,26 @@
+name: drone-formation-e2e
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - pyyaml
+  - jupyterlab
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cpuonly
+  - h5py
+  - scikit-learn
+  - tqdm
+  - pip:
+      - rospkg
+      - catkin_pkg
+      - empy
+      - transforms3d
