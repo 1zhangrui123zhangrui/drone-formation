@@ -1,4 +1,4 @@
-# drone-formation-e2e
+# drone-formation
 
 端到端无人机编队控制研究仓库模板，覆盖 ROS/Gazebo 仿真、MATLAB 数据处理与训练、在线控制部署、实验复现与结果汇总。
 
