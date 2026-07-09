@@ -21,6 +21,8 @@
     <param name="z_target" value="$(arg z_target)"/>
     <param name="num_drones" value="4"/>
     <param name="formation_size" value="0.5"/>
+    <param name="prehover_duration" value="4.0"/>
+    <param name="transition_duration" value="8.0"/>
     <param name="rate" value="10"/>
   </node>
 

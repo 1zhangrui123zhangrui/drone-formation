@@ -22,6 +22,8 @@ class SceneDriver:
         self.rate_hz = rospy.get_param('~rate', 10)
         self.num_drones = rospy.get_param('~num_drones', 4)
         self.formation_size = rospy.get_param('~formation_size', 0.5)
+        self.prehover_duration = rospy.get_param('~prehover_duration', 0.0)
+        self.transition_duration = rospy.get_param('~transition_duration', 0.0)
         # S3 队形切换时刻
         self.t_switch_1 = rospy.get_param('~t_switch_1', 40.0)   # 矩形→菱形
         self.t_switch_2 = rospy.get_param('~t_switch_2', 80.0)   # 菱形→三角形+中心
@@ -41,7 +43,8 @@ class SceneDriver:
         time.sleep(1.0)
         self.t0 = rospy.Time.now().to_sec()
         rospy.loginfo(f'[scene_driver] starting publish loop: R={self.radius}, '
-                      f'omega={self.omega}, z={self.z_target}, formation_size={self.formation_size}')
+                      f'omega={self.omega}, z={self.z_target}, formation_size={self.formation_size}, '
+                      f'prehover={self.prehover_duration}, transition={self.transition_duration}')
 
     def get_formation_offsets(self, t):
         """根据场景与时间返回 N 个偏移向量 (论文 §3.2 公式 3.8)"""
@@ -70,7 +73,7 @@ class SceneDriver:
                     np.array([ d, -d * 0.6]),
                     np.array([ 0,  0])]
 
-    def center_trajectory(self, t):
+    def base_center_trajectory(self, t):
         if self.scenario == 'hover':
             return np.array([0.0, 0.0]), np.array([0.0, 0.0])
         elif self.scenario in ('circle', 'reconfig'):
@@ -91,6 +94,46 @@ class SceneDriver:
         else:
             rospy.logwarn_throttle(5, f'Unknown scenario: {self.scenario}')
             return np.array([0.0, 0.0]), np.array([0.0, 0.0])
+
+    @staticmethod
+    def _cubic_hermite(p0, v0, p1, v1, s, duration):
+        h00 = 2.0 * s**3 - 3.0 * s**2 + 1.0
+        h10 = s**3 - 2.0 * s**2 + s
+        h01 = -2.0 * s**3 + 3.0 * s**2
+        h11 = s**3 - s**2
+
+        dh00 = 6.0 * s**2 - 6.0 * s
+        dh10 = 3.0 * s**2 - 4.0 * s + 1.0
+        dh01 = -6.0 * s**2 + 6.0 * s
+        dh11 = 3.0 * s**2 - 2.0 * s
+
+        pos = h00 * p0 + h10 * duration * v0 + h01 * p1 + h11 * duration * v1
+        vel = (
+            dh00 * p0 + dh10 * duration * v0 + dh01 * p1 + dh11 * duration * v1
+        ) / duration
+        return pos, vel
+
+    def center_trajectory(self, t):
+        dynamic_scene = self.scenario != 'hover'
+        has_smooth_entry = dynamic_scene and (
+            self.prehover_duration > 0.0 or self.transition_duration > 0.0
+        )
+        if not has_smooth_entry:
+            return self.base_center_trajectory(t)
+
+        if t < self.prehover_duration:
+            return np.array([0.0, 0.0]), np.array([0.0, 0.0])
+
+        transition_start = self.prehover_duration
+        transition_end = self.prehover_duration + self.transition_duration
+        if self.transition_duration > 0.0 and t < transition_end:
+            s = np.clip((t - transition_start) / self.transition_duration, 0.0, 1.0)
+            p0 = np.array([0.0, 0.0])
+            v0 = np.array([0.0, 0.0])
+            p1, v1 = self.base_center_trajectory(0.0)
+            return self._cubic_hermite(p0, v0, p1, v1, s, self.transition_duration)
+
+        return self.base_center_trajectory(t - transition_end)
 
     def publish_once(self, t):
         c, cdot = self.center_trajectory(t)

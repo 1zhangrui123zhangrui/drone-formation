@@ -17,7 +17,7 @@ teacher_controller - Teacher PD 控制器 (4 机版)
 import rospy
 import time
 import numpy as np
-from geometry_msgs.msg import PointStamped, Vector3Stamped, Twist
+from geometry_msgs.msg import PointStamped, Vector3Stamped, Twist, TwistStamped
 from nav_msgs.msg import Odometry
 
 
@@ -61,11 +61,13 @@ class TeacherController:
             rospy.Subscriber(f'{ns_d}/v_des', Vector3Stamped, self._make_vdes_cb(i))
 
         # 发布 N 套
-        self.pub_cmd = []
+        self.pub_cmd_world = []
         self.pub_teacher = []
         for i in range(self.num_drones):
             ns_d = f'/drone{i+1}'
-            self.pub_cmd.append(rospy.Publisher(f'{ns_d}/cmd_vel', Twist, queue_size=10))
+            self.pub_cmd_world.append(
+                rospy.Publisher(f'{ns_d}/command/twist', TwistStamped, queue_size=10)
+            )
             self.pub_teacher.append(rospy.Publisher(f'{ns_d}/cmd_vel_teacher', Twist, queue_size=10))
 
         rospy.loginfo('[teacher] subscribers/publishers ready, starting control loop')
@@ -158,13 +160,25 @@ class TeacherController:
                 if result is None:
                     continue
                 v_x, v_y, v_z, w_z = result
-                msg = Twist()
-                msg.linear.x = v_x
-                msg.linear.y = v_y
-                msg.linear.z = v_z
-                msg.angular.z = w_z
-                self.pub_cmd[i].publish(msg)
-                self.pub_teacher[i].publish(msg)
+                # Teacher PD is derived in world coordinates from world-frame errors.
+                # Hector's /command/twist consumes world-frame TwistStamped directly,
+                # while /cmd_vel would be interpreted in stabilized frame and rotated again.
+                msg_world = TwistStamped()
+                msg_world.header.stamp = rospy.Time.now()
+                msg_world.header.frame_id = 'world'
+                msg_world.twist.linear.x = v_x
+                msg_world.twist.linear.y = v_y
+                msg_world.twist.linear.z = v_z
+                msg_world.twist.angular.z = w_z
+
+                msg_teacher = Twist()
+                msg_teacher.linear.x = v_x
+                msg_teacher.linear.y = v_y
+                msg_teacher.linear.z = v_z
+                msg_teacher.angular.z = w_z
+
+                self.pub_cmd_world[i].publish(msg_world)
+                self.pub_teacher[i].publish(msg_teacher)
                 n_published += 1
 
             # 周期性 debug 日志

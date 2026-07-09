@@ -43,18 +43,28 @@
 
 ## 数据现状审计
 
-下面的统计来自直接运行 `scripts/bag_to_mat.py` 对现有 bag 的重新提取，不是旧文档抄写。
+下面的统计现在分成两层理解：
+
+- `seed42` 旧 bag 与早期失败 pilot 仍保留，用于诊断历史问题
+- 当前真正应作为主数据入口的，是 `data/raw_bags/v2/` 下通过正式审计的 `v2` bag，以及由它们重建出的 `data/processed/raw/*.mat`
+
+当前 canonical `v2` 原始数据统计如下：
 
 | 场景 | bag 文件 | 干净样本数 | 现状判断 |
 | --- | --- | ---: | --- |
-| S1 Hover | `scene01_hover_4drones_seed42.bag` | 2396 | 4 机全部正常 |
-| S2 Circle | `s2_circle_4drones_seed42.bag` | 1798 | 仅 `drone3/4` 可用，`drone1/2` 全部失效 |
-| S2' Lemni | `scene02p_lemni_4drones_seed42.bag` | 3596 | 4 机都能提取到干净样本 |
-| S3 Reconfig | `scene03_reconfig_4drones_seed42.bag` | 3068 | `drone1/4` 样本严重截断 |
-| S4 Wind | `scene04_wind_4drones_seed42.bag` | 2269 | `drone2/3` 样本严重截断 |
-| S5 Longtime | `scene05_longtime_4drones_seed42.bag` | 4055 | `drone3/4` 样本严重截断 |
+| S1 Hover | `scene01_hover_4drones_v2.bag` | 2386 | 4 机全部通过审计 |
+| S2 Circle | `scene02_circle_4drones_v2_worldfix_entryfix.bag` | 3591 | 4 机全部通过审计 |
+| S2' Lemni | `scene02p_lemni_4drones_v2.bag` | 3582 | 4 机全部通过审计 |
+| S3 Reconfig | `scene03_reconfig_4drones_v2.bag` | 4774 | 4 机全部通过审计 |
+| S4 Wind | `scene04_wind_4drones_v2.bag` | 3581 | 4 机全部通过审计 |
+| S5 Longtime | `scene05_longtime_4drones_v2.bag` | 7188 | 4 机全部通过审计 |
 
-`data/processed/` 中已有窗口化数据集，说明当前训练实际上是基于“**过滤 NaN 后保留下来的部分样本**”进行的，而不是基于完整、稳定、四机全可用的数据集。
+`data/processed/` 已于 `2026-07-09` 夜间基于上述 6 个 `v2` bag 重新生成，当前构建结果是：
+
+- 原始样本总数：`25102`
+- `15D` 窗口总数：`25083`
+- 划分结果：`train=17558`, `val=5017`, `test=2508`
+- 构建留痕文件：`data/processed/dataset_build_manifest.json`
 
 ## 与论文目标的比对
 
@@ -145,8 +155,9 @@
 ### 当前已经观察到的现象
 
 - S1 悬停数据稳定，说明基础仿真链路没问题
-- S2/S4/S5 中部分无人机会大范围漂移或爆炸，说明动态场景稳定性仍是核心问题
-- 经过 NaN/Inf 过滤后，仍能得到约 `17182` 条样本并训练出 3 个模型
+- 旧 `seed42` 动态 bag 与修复前的 `S2` pilot 中，部分无人机会大范围漂移或爆炸，说明动态场景稳定性曾是核心问题
+- 经过“世界系控制接口 + 平滑入轨 + 按仿真时间正式录制”修复后，`S1-S5` 现在都已经拿到新的 `v2` 审计通过 bag
+- 基于这套 `v2` bag 重建后的 canonical 原始样本总量为 `25102`
 - 现有 `results/figures/` 主要是 bag 的实际轨迹图和误差图，证明场景确实跑过，但不是论文最终模型对比图
 
 ### 和论文目标相比，哪些对，哪些不对
@@ -160,7 +171,7 @@
 
 - 论文主方法 `BiLSTM-DA` 的最终闭环结果还没有实际产出
 - 论文中的很多数值仍是文稿中的目标值或占位值，不是当前仓库真实跑出来的结果
-- 当前数据质量和四机一致性不足以直接复现论文第 5 章的强结论
+- 虽然 `v2` 原始数据已经通过审计，但现有模型 checkpoint 还没有基于这套新数据重训
 
 ## 下一步应该怎么完成
 
@@ -169,18 +180,243 @@
 ### 阶段 1：先把“真实可用数据”问题收口
 
 1. 重新定义数据合格标准：主实验场景至少保证 4 机全时段可用，不能靠大量事后过滤支撑结论。
-2. 针对 `S2/S4/S5` 重新评估是否需要重录 bag。
+2. `S2` 已经拿到一份新的正式 `PASS` bag，接下来重点转为评估 `S2' / S3 / S4 / S5` 是否需要按同样流程重录。
 3. 如果继续使用 `hector_quadrotor`，要先验证：
    - 4 机都不爆炸
    - 90 s / 180 s 内不出现大范围漂移
-   - 主实验至少在 `S2` 上拿到完整四机数据
+   - 主动态场景都至少拿到一份通过正式审计的四机数据
 4. 如果始终做不到，尽快转向更稳定的仿真底座，而不是继续在坏数据上训练。
+
+### 阶段 1 的正式验收标准
+
+从现在开始，任何 bag 只有在通过 `scripts/audit_bag_quality.py` 后，才能进入论文主实验或训练主数据集。
+
+当前采用的高标准验收口径是：
+
+1. 四架无人机都必须有 odom 数据。
+2. 每架无人机都必须达到该场景的最小时长。
+3. 每架无人机的轨迹坐标都必须处于合理物理范围内。
+4. 每架无人机都必须有非零的干净同步样本。
+5. 每架无人机的 `clean_ratio` 必须不低于 `95%`。
+
+场景阈值当前定义为：
+
+| 场景 | 最小时长 | 最大允许 `max |pos|` |
+| --- | ---: | ---: |
+| `scene01_hover` | 55 s | 20 m |
+| `scene02_circle` | 85 s | 20 m |
+| `scene02p_lemni` | 85 s | 20 m |
+| `scene03_reconfig` | 110 s | 25 m |
+| `scene04_wind` | 85 s | 30 m |
+| `scene05_longtime` | 170 s | 35 m |
+
+注意：这套标准是按“论文最终数据”设计的，不是按“能凑出一些训练样本”设计的。任何不满足标准的数据都只能作为诊断材料，不能当作正式结果使用。
+
+### 阶段 1 的当前准备结论
+
+在正式重录 `S2` 之前，当前工程里还有一个必须明确的现实前提：
+
+- [scene02_circle_4drones.launch](/home/jiuyao/drone-formation-e2e/ros_ws/src/drone_sim/launch/scene02_circle_4drones.launch:1) 当前使用的是 `omega=0.2`
+- [teacher_params.yaml](/home/jiuyao/drone-formation-e2e/ros_ws/src/drone_sim/config/teacher_params.yaml:1) 当前使用的是 `kp_h=1.5`
+
+这两个值都是“为了降低数值爆炸概率而做的稳定化配置”，并不等同于论文文稿中最理想的目标参数。为了保证学术诚信，后续必须遵守两条原则：
+
+1. 如果正式实验最终使用的是这组稳定化参数，论文中必须如实说明，不得写成原始目标参数跑出的结果。
+2. 如果想回到更激进的目标参数，必须先做逐步稳定性验证，不能直接跳到论文目标值后只保留好看的结果。
+
+按论文要求推进时，必须进一步区分两种口径：
+
+1. **论文目标参数口径**
+   - 指论文文稿希望验证的原始目标参数组合
+   - 只有在这些参数下完成稳定性验证并通过正式审计，才可以写成“按论文目标参数复现”
+2. **稳定化复现实验口径**
+   - 指当前为了让 `hector_quadrotor` 不发生数值爆炸而采用的降阶配置
+   - 如果最终论文实验沿用 `omega=0.2`、`kp_h=1.5`，正文必须明确写成“稳定化复现配置”或同等含义，不能与论文目标参数混写
+
+因此，当前 `S2` 的第一轮正式任务不是“直接追求最好看数值”，而是：
+
+- 先用当前稳定化配置录出 **四机全程 PASS** 的 `S2`
+- 在此基础上再决定是否逐步恢复更接近论文目标的参数
+
+### 2026-07-09 最新诊断、修复与 S2 正式通过结果
+
+今天围绕 `S2` 已经完成了一条完整闭环：先复盘旧失败，再做诊断 pilot，随后修复控制链路和场景进入方式，最后重新正式录制并通过审计。需要把这条因果链明确记录下来。
+
+1. `data/raw_bags/v2/scene02_circle_4drones_v2.bag` 的失败首先暴露了**录制流程错误**。
+   - 该 bag 的消息时间戳范围只有约 `69 s` 仿真时间，不是目标的 `90 s`
+   - 根因是旧版 `record_bags_v2.sh` 按**墙钟时间** `sleep 90` 后停止录包
+   - 在 `use_sim_time=true` 的 Gazebo 下，墙钟 `90 s` 并不等于仿真 `90 s`
+
+2. 随后的 `S2` pilot 证明旧问题不止是录包流程，确实还存在**真实的动力学/控制失稳**。
+   - `wait_scene_ready.py` 能正常判定 4 机 ready，说明场景起飞链路已经打通
+   - 但旧控制链路下，`scene02_circle` 仍会在早期触发 `flip over`、`NaN` 和轨迹发散
+   - 这说明仅修复录制流程并不足以得到论文级原始数据
+
+3. 这次真正找到的核心根因有两个，而且都已经修复。
+   - `teacher_controller.py` 的水平 PD 是按**世界坐标系**位置误差生成 `vx, vy`
+   - 但 `hector` 的 `/cmd_vel` 会把 `geometry_msgs/Twist` 解释为 **stabilized frame** 指令，再按 yaw 旋转到世界系
+   - 结果就是 Teacher 的世界系控制被**重复旋转**，动态场景下方向会系统性偏掉
+   - 正确修复不是改数据标签，而是把真实执行指令改发到 `/droneN/command/twist`，使用 `TwistStamped` 的世界系接口
+   - 同时保留 `/droneN/cmd_vel_teacher` 作为世界系 Teacher 标签，这样论文的 `15D` 特征/标签语义不变
+   - 第二个根因是动态轨迹启动过于突兀：圆轨迹一开始就在运动，而无人机刚 spawn 时还在原点附近
+   - 修复方式是在 `scene_driver.py` 中加入 `prehover_duration` 和 `transition_duration`，让动态场景先悬停，再平滑进入目标轨迹
+
+4. 本次仓库内的正式修复包括：
+   - `scripts/record_bags_v2.sh` 改为先等待**4 机服务、关键话题、起飞高度和最低仿真时间**，再开始录包
+   - 录包现在包含 `/clock`，并改为按 **sim time** 等待目标时长
+   - `enable_motors_delayed.py` 增加 `engage` 重试
+   - `teacher_controller.py` 真实控制改发 `/droneN/command/twist`
+   - `scene_driver.py` 新增平滑入轨逻辑
+   - `scene02_circle_4drones.launch`、`scene02p_lemni_4drones.launch`、`scene03_reconfig_4drones.launch`、`scene04_wind_4drones.launch` 已统一接入 `prehover_duration=4.0` 与 `transition_duration=8.0`
+
+5. 诊断历史仍然保留，便于追溯。
+   - 旧正式失败 bag：`data/raw_bags/v2/scene02_circle_4drones_v2.bag`
+   - 旧诊断 pilot bag：`data/raw_bags/v2/scene02_circle_4drones_v2_pilot_2026-07-09_interrupt.bag`
+   - 新正式通过 bag：`data/raw_bags/v2/scene02_circle_4drones_v2_worldfix_entryfix.bag`
+
+### 2026-07-09 夜间 S2 正式重录结果
+
+修复完成后，已经实际执行：
+
+- `RECORD_BAG_SUFFIX='_worldfix_entryfix' bash scripts/record_bags_v2.sh s2`
+
+本次结果已经满足当前 README 中定义的论文级数据审计门槛：
+
+- `rosbag info` 显示 bag 时长约 `90 s`，时间范围 `14.28 s -> 104.42 s`
+- `scripts/audit_bag_quality.py` 对 `scene02_circle` 的审计结果为 `PASS`
+- 四架无人机全部满足 `duration >= 85 s`
+- 四架无人机全部满足 `clean_ratio = 100.0%`
+- 四架无人机全部满足 `max|pos| = 3.45 m`，远低于 `20 m` 上限
+
+审计结果如下：
+
+- `drone1`: `duration=90.1s`, `clean=902`, `clean_ratio=100.0%`, `max|pos|=3.45m`
+- `drone2`: `duration=90.0s`, `clean=898`, `clean_ratio=100.0%`, `max|pos|=3.45m`
+- `drone3`: `duration=89.8s`, `clean=896`, `clean_ratio=100.0%`, `max|pos|=3.45m`
+- `drone4`: `duration=89.7s`, `clean=895`, `clean_ratio=100.0%`, `max|pos|=3.45m`
+
+这说明本次修复的意义不是“把失稳延后一点”，而是已经把旧 `S2` 失败中的核心控制执行错误和入轨冲击问题同时消掉了。当前可以正式确认：
+
+- `S2` 已经拿到一份**四机全程 PASS** 的正式原始 bag
+- 这份结果目前属于**稳定化复现实验配置**，因为它仍然建立在 `omega=0.2`、`kp_h=1.5` 的前提上
+- 因此它已经满足“论文级原始数据”的质量门槛，但还不能自动写成“原始论文目标参数下的复现结果”
+
+### 下一步执行顺序
+
+在当前事实下，实验部分最合理的下一步已经不是继续修 `S2`，而是把这份通过结果作为稳定基线向后推进：
+
+1. **先固化 `S2` 稳定基线**
+   - 把 `scene02_circle_4drones_v2_worldfix_entryfix.bag` 视为当前第一份合格的 `S2` 正式数据
+   - 后续所有 README、论文草稿和实验表述都要明确它对应的是“稳定化复现实验配置”
+
+2. **立即做 `S2` 的可重复性验证**
+   - 用完全相同的参数和流程再独立重录 `2-3` 次
+   - 目标不是追求更好看的数值，而是确认这次 `PASS` 不是偶然样本
+   - 每次都要保留 bag 名称、`rosbag info`、`audit_bag_quality.py` 输出
+
+3. **把同一套修复思路推到其余动态场景**
+   - 按优先级建议先做 `S2'`，再做 `S4`，然后 `S5`
+   - 因为这些场景同样依赖动态目标轨迹，也最可能受益于“世界系控制接口 + 平滑入轨”
+   - 只有动态场景整体稳定后，训练集和主结果表才有真正可靠的基础
+
+4. **把“回到论文目标参数”单列成后续研究任务**
+   - 现在不应该回头破坏已经通过的 `S2` 基线
+   - 如果后面要恢复更接近论文目标的参数，必须从这份稳定基线出发，做单变量递进验证
+   - 每次调整都只能作为新的诊断实验，不能与当前稳定化正式结果混写
+
+5. **训练与论文主表的准入条件**
+   - 至少先确保主动态场景中，正式纳入的数据都通过 `audit_bag_quality.py`
+   - 再基于这些通过审计的 bag 重新生成 `processed/raw` 和训练集
+   - 在此之前，现有很多处理产物仍只能看作“阶段性诊断产物”，不能直接当最终论文结果
+
+### 2026-07-09 夜间六场景 v2 数据集重建结果
+
+在 `S2 / S2' / S3 / S4 / S5` 全部通过审计后，又补录了 `S1`，因此当前已经形成一套完整的六场景 `v2` canonical bag 集：
+
+- `scene01_hover_4drones_v2.bag`
+- `scene02_circle_4drones_v2_worldfix_entryfix.bag`
+- `scene02p_lemni_4drones_v2.bag`
+- `scene03_reconfig_4drones_v2.bag`
+- `scene04_wind_4drones_v2.bag`
+- `scene05_longtime_4drones_v2.bag`
+
+随后已完成两步正式重建：
+
+1. 用 `scripts/bag_to_mat.py` 重写 `data/processed/raw/*.mat`
+2. 用新的 `scripts/prepare_datasets.py` 重写 `data/processed/` 下的归一化统计与训练/验证/测试集
+
+当前重建结果为：
+
+- `15D`: `train=17558`, `val=5017`, `test=2508`
+- `9D`: `train=17558`, `val=5017`, `test=2508`
+- 归一化统计：`norm_stats_15d.mat`, `norm_stats_9d.mat`
+- 构建留痕：`dataset_build_manifest.json`
+
+必须明确的一点是：
+
+- 当前 `data/trained_models/` 中已有 checkpoint 仍是**旧数据阶段**的训练产物
+- 这次完成的是“新 canonical 数据与训练集重建”，还**没有**在当前 shell 环境里基于它们重训模型
+- 原因不是我们不打算重训，而是当前 shell 里没有可直接调用的 `matlab`/`octave` 运行时
+
+### 论文统计口径规则
+
+从现在开始，论文实验结果必须遵守下面的统计规则，不能再按单次最好结果组织结论：
+
+1. 论文主表、主图、鲁棒性对比结论必须来自**多组独立运行的均值统计**，不能只取单次最好 bag。
+2. 当前已经完成的 `S2` `repeat01/repeat02` 属于**稳定性复验**，它的作用是证明 `PASS` 不是偶然；这一步可以先做 `2-3` 次。
+3. 真正进入论文结果汇总时，主动态场景和主要对比方法应至少做 **5 次独立运行**，统一报告 `mean/std/n`，如果做显著性检验，也必须基于同一批独立重复。
+4. 训练用 canonical 数据集与论文评测用重复运行 bag 必须分开管理，不能把“训练集构建用 bag”和“评测均值统计用 bag”混成同一口径。
+5. 使用 `omega=0.2`、`kp_h=1.5` 的结果，仍然只能归入**稳定化复现实验配置**；如果后续回到论文目标参数，必须单独成组统计，不能混算平均值。
+
+### 当前最优先的下一步
+
+现在最该做的不是继续扩写理论说明，而是把“新 canonical 数据集”真正转化为可用于论文对比的模型与评测结果：
+
+1. 先准备可执行训练环境。
+   - 当前 shell 没有 `matlab`/`octave`
+   - 系统里有 `python3`，但还缺 `torch`、`h5py`、`sklearn`、`tqdm`
+   - 严格按论文实验要求时，训练主流程仍以 `matlab/train/*.m` 为准
+   - 仓库现已新增 [scripts/train_models_matlab.sh](/home/jiuyao/drone-formation-e2e/scripts/train_models_matlab.sh:1)，用于在 MATLAB 环境中非交互式调用 `train_all_models`
+   - [environment.yml](/home/jiuyao/drone-formation-e2e/environment.yml:1)、[scripts/bootstrap_python_training_env.sh](/home/jiuyao/drone-formation-e2e/scripts/bootstrap_python_training_env.sh:1) 与 [scripts/train_models.py](/home/jiuyao/drone-formation-e2e/scripts/train_models.py:1) 仅保留为无 MATLAB 时的工程备用路径，不作为论文正式训练口径
+2. 在同一套 canonical `v2` 数据上重训 `c1/c2/c3a/c3` 四个模型，旧 checkpoint 不能继续拿来当正式结果。
+3. 只有在新模型完成重训后，才进入论文主评测的多次独立运行统计；否则现在做出来的模型对比仍然会混入旧数据阶段偏差。
 
 ### 阶段 2：补齐主方法训练
 
-1. 查清 `c3_bidir_attn.mat` 为什么没有生成。
-2. 跑通 `BiLSTM-DA` 训练并保存最终模型。
-3. 保存训练日志、验证曲线和模型配置快照。
+1. 准备训练运行时。
+   - 优先方案：在有 MATLAB 的环境中直接执行 `matlab/train/train_all_models.m`
+   - 备选方案：按 `environment.yml` 补齐 Python 依赖后，建立 Python 侧等价训练链路
+2. 在当前 canonical `v2` 数据集上重训并单独保存：
+   - `c1_lstm9d.mat`
+   - `c2_lstm15d.mat`
+   - `c3a_bilstm.mat`
+   - `c3_bidir_attn.mat`
+3. 保存训练日志、验证曲线、数据集构建 manifest 与模型配置快照，确保后续论文结果可追溯。
+
+### Windows MATLAB 推进步骤
+
+如果你当前采用的是 **Windows 端 MATLAB + ROS Toolbox + WSL 仓库目录**，建议按下面顺序推进：
+
+1. 先不要重新录 bag，当前第一优先级是用 canonical `v2` 数据集完成一次**正式 MATLAB 重训**。
+2. 在 Windows MATLAB 中切到仓库根目录，例如：
+   - `cd('\\wsl.localhost\Ubuntu-20.04\home\jiuyao\drone-formation-e2e')`
+3. 直接运行新的正式入口：
+   - `run matlab/run_paper_training.m`
+4. 这一步会自动：
+   - 调用 `train_all_models`
+   - 训练 `c1/c2/c3a/c3`
+   - 把训练日志写入 `results/training/`
+   - 检查每个 `.mat` 模型文件里是否同时包含 `net/info/metadata`
+5. 如果 `c3_bidir_attn.mat` 仍然失败，不要跳过它继续写论文结果，先保留日志并回到仓库里排查失败原因。
+6. 只有在四个模型都基于当前 canonical 数据完成重训后，才进入下一阶段：
+   - 用新 checkpoint 做统一离线评测
+   - 再做论文要求的多次独立运行统计
+
+当前仓库的推荐离线评测入口是：
+
+- `run matlab/run_offline_evaluation.m`
+
+这一步会在同一 canonical test set 上统一评测 `c1/c2/c3a/c3` 四个模型，并把结果保存到 `data/eval_results/offline/`，用于先确认新训练模型本身是正常的，再进入更昂贵的闭环实验。
 
 ### 阶段 3：打通在线部署
 

@@ -13,9 +13,17 @@ This folder stores non-source experiment artifacts.
 
 As of `2026-07-09`, this directory already contains:
 
-- all 6 scene bags for the `seed42` run
-- converted raw `.mat` files for all 6 scenes
-- prepared `9D` and `15D` datasets
+- the older `seed42` bags kept for diagnosis/history
+- a full six-scene audited `v2` bag set in `raw_bags/v2/`:
+  - `scene01_hover_4drones_v2.bag`
+  - `scene02_circle_4drones_v2_worldfix_entryfix.bag`
+  - `scene02p_lemni_4drones_v2.bag`
+  - `scene03_reconfig_4drones_v2.bag`
+  - `scene04_wind_4drones_v2.bag`
+  - `scene05_longtime_4drones_v2.bag`
+- rebuilt raw `.mat` files in `processed/raw/`
+- rebuilt `9D` and `15D` train/val/test datasets in `processed/`
+- `dataset_build_manifest.json` describing the current dataset build
 - trained checkpoints for:
   - `c1_lstm9d.mat`
   - `c2_lstm15d.mat`
@@ -25,7 +33,11 @@ The proposed final model `c3_bidir_attn.mat` is still missing.
 
 ## Important Caveat
 
-Several dynamic-scene bags contain severe trajectory explosions or partial drone failures. The prepared datasets are therefore based on sample filtering, not on fully clean four-drone runs. Do not treat the current artifacts as final paper-grade evaluation data.
+The current `processed/raw/` and `processed/` datasets were rebuilt from the audited `v2` bag set and should now be treated as the canonical dataset inputs. However, the existing model checkpoints in `trained_models/` are still older training artifacts and were not retrained against this new canonical dataset set.
+
+## Reporting Rule
+
+For the paper-facing experiments, do not report single-run best cases from this directory as final evidence. The canonical `processed/` datasets are for model building, while paper metrics should come from separately tracked independent evaluation runs and be summarized as multi-run averages with variance information.
 
 ## Sharing
 

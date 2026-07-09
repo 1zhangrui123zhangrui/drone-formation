@@ -1,4 +1,6 @@
-classdef attention_layer_temporal < nnet.layer.Layer
+classdef attention_layer_temporal < nnet.layer.Layer ...
+        & nnet.layer.Formattable ...
+        & nnet.layer.Acceleratable
     %ATTENTION_LAYER_TEMPORAL Temporal attention over BiLSTM outputs.
 
     properties (Learnable)
@@ -28,35 +30,59 @@ classdef attention_layer_temporal < nnet.layer.Layer
         end
 
         function C = predict(layer, H)
-            % H: [H_dim, T] or [H_dim, T, N]
+            % H uses MATLAB sequence format:
+            %   single sequence -> [H_dim, T]
+            %   mini-batch      -> [H_dim, B, T]  (format "CBT")
+            %
+            % Output should be sequence-to-one context:
+            %   single sample -> [H_dim, 1]
+            %   mini-batch    -> [H_dim, B]
+            %
+            % Do not keep a singleton time dimension [H_dim, 1, N], otherwise
+            % MATLAB can still classify the network as sequence-output and
+            % require sequence-form regression responses.
             sz = size(H);
             H_dim = sz(1);
-            T = sz(2);
-            N = prod(sz(3:end));
 
             Wta = layer.Wta;
             bta = layer.bta;
             vta = layer.vta;
 
-            H2 = reshape(H, H_dim, T * N);                  % [H_dim, T*N]
-            U = tanh(Wta * H2 + repmat(bta, 1, T * N));     % [attn_dim, T*N]
-            e = vta * U;                                    % [1, T*N]
-            e = reshape(e, T, N);                           % [T, N]
-
-            e_exp = exp(e - max(e, [], 1));
-            alpha = e_exp ./ sum(e_exp, 1);                 % [T, N]
-
-            % Keep dlarray outputs as dlarray instead of materializing doubles.
-            H3 = reshape(H, H_dim, T, N);                   % [H, T, N]
-            alpha3 = reshape(alpha, 1, T, N);               % [1, T, N]
-            C = sum(H3 .* alpha3, 2);                       % [H, 1, N]
-
-            out_sz = [H_dim, 1, sz(3:end)];
-            if numel(out_sz) < 3
-                C = reshape(C, H_dim, 1);
+            if numel(sz) < 3
+                % Single sequence: H is [C, T]
+                T = sz(2);
+                H2 = reshape(H, H_dim, T);                  % [C, T]
+                U = tanh(Wta * H2 + repmat(bta, 1, T));     % [A, T]
+                e = vta * U;                                % [1, T]
+                e_exp = exp(e - max(e, [], 2));
+                alpha = e_exp ./ sum(e_exp, 2);             % [1, T]
+                C = sum(H2 .* alpha, 2);                    % [C, 1]
             else
-                C = reshape(C, out_sz);
+                % Mini-batch sequence: H is [C, B, T] in MATLAB's CBT format.
+                B = sz(2);
+                T = sz(3);
+
+                H3 = reshape(H, H_dim, B, T);               % [C, B, T]
+                H2 = reshape(permute(H3, [1 3 2]), H_dim, T * B);   % [C, T*B]
+                U = tanh(Wta * H2 + repmat(bta, 1, T * B));         % [A, T*B]
+                e = vta * U;                                        % [1, T*B]
+                e = reshape(e, T, B);                               % [T, B]
+
+                e_exp = exp(e - max(e, [], 1));
+                alpha = e_exp ./ sum(e_exp, 1);                     % [T, B]
+
+                alpha3 = permute(reshape(alpha, T, B), [3 2 1]);    % [1, B, T]
+                C = sum(H3 .* alpha3, 3);                           % [C, B]
             end
+
+            % This layer changes sequence data [C,B,T] into feature data [C,B].
+            if isa(H, 'dlarray')
+                C = dlarray(C, 'CB');
+            end
+        end
+
+        function C = forward(layer, H)
+            C = predict(layer, H);
         end
     end
 end

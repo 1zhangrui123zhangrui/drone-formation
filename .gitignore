@@ -50,6 +50,7 @@ data/raw_bags/
 data/processed/raw/
 data/processed/interim/
 data/processed/cache/
+data/processed/*.json
 data/trained_models/
 
 # Generated experiment outputs
@@ -57,6 +58,12 @@ results/run_*/
 results/logs/
 results/tmp/
 results/cache/
+results/training/
+
+# Runtime logs and local outputs
+*.log
+*.out
+*.err
 
 # Archives and local dumps
 *.bag.active

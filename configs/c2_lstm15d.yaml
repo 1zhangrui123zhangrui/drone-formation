@@ -6,10 +6,10 @@ input_dim: 15
 hidden_dim: 192
 output_dim: 4
 sequence_length: 20
-sample_time: 0.02
+sample_time: 0.1
 topics:
   state_topic: /formation/state
   command_topic: /formation/cmd
 normalization:
   enabled: true
-  stats_file: data/processed/normalization_stats.mat
+  stats_file: data/processed/norm_stats_15d.mat
