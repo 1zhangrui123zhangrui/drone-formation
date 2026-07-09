@@ -1,549 +1,227 @@
-# 无人机群编队端到端控制实验复现 README
+# drone-formation-e2e
 
-本仓库用于归档、修改和复现实验相关材料，主题为多无人机编队端到端控制。当前重点是围绕 `hector_quadrotor` 仿真、Teacher PD 控制器、目标条件模仿学习（GCIL）以及 LSTM/BiLSTM/双注意力模型完成数据采集、训练、评估和论文图表生成。
+子母无人机编队端到端控制复现实验仓库。当前论文正文分别位于 [docs/initial_part1.docx](docs/initial_part1.docx) 和 [docs/experiment.docx](docs/experiment.docx)，代码实现覆盖 ROS/Gazebo 仿真、Teacher 数据生成、MATLAB 数据处理与训练脚本，以及部分结果可视化。
 
-> 当前状态：所有动态场景的历史 bag 数据存在数值爆炸问题，必须优先解决 NaN Bug 后再继续完整复现。
+本 README 已整合并取代此前根目录中分散的实验说明、阶段记录和临时上下文文件。以下状态以 **2026-07-09** 的仓库实际文件为准，而不是早期计划稿。
 
-## 1. 当前 P0 阻塞：NaN Bug
+## 论文方法概要
 
-### 1.1 问题描述
+本文方法是一个 Teacher-Guided 的端到端编队控制框架 `BiLSTM-DA`，核心结构是：
 
-`hector_quadrotor` 在持续动态飞行约 150-200 秒后会触发数值异常：
+1. `15D` 输入特征：`[p_des(3), v_des(3), p_actual(3), v_actual(3), u_teacher_xyz(3)]`
+2. `W=20` 的滑动时间窗，采样周期 `0.1 s`
+3. 双向 `BiLSTM` 主干
+4. 特征注意力 `FA` + 时序注意力 `TA`
+5. Student/Teacher 软硬切换与长航时部署增强
 
-```text
-propulsion model input contains **!?* Nan values!
-drag model input contains **!?* Nan values!
-```
+当前代码中，`bag_to_mat.py` 和 MATLAB 数据管线使用的 15 维定义已经和论文一致，最后 3 维是 `u_teacher_xyz`，不是 `e_p`。
 
-NaN 一旦进入 Gazebo 物理积分器，飞机坐标会逐帧累积并最终达到 km 量级。已录制的 `s2_circle` bag 第一帧中，`drone1 = (3224, -7036, +2253) m`，远超合理范围。
+## 当前完成到哪一步
 
-### 1.2 受影响数据
+### 已完成
 
-| 场景 | 录制 bag | 状态 | 说明 |
-| --- | --- | --- | --- |
-| S1 悬停 | `scene01_hover_4drones_seed42.bag` | 正常 | 静态悬停，`z=1.80 m`，xy 约 `±0.5 m` |
-| S2 圆形 | `s2_circle_4drones_seed42.bag` | 损坏 | 第一帧已在 3000 m 外，NaN 已触发 |
-| S2' 八字 | `scene02p_lemni_4drones_seed42.bag` | 损坏 | 位置爆炸到 `x:-100~25 m` 量级 |
-| S3 重构 | `scene03_reconfig_4drones_seed42.bag` | 损坏 | `drone3` 飞到 `(-50, -90)` |
-| S4 风扰 | `scene04_wind_4drones_seed42.bag` | 损坏 | `drone2` 飞到 `(1349, -1737, 95)` |
-| S5 长航时 | `scene05_longtime_4drones_seed42.bag` | 损坏 | `drone4` 飞到 `(832, -2035, 6917)` |
-
-### 1.3 两条修复路径
-
-| 路径 | 方案 | 优点 | 风险 |
-| --- | --- | --- | --- |
-| 路径 1 | 修复 `hector_quadrotor` NaN：降低 `omega`、给 Teacher 加 NaN/越界保护、启动后 10-15 s 立即录 bag | 改动小，代码结构基本不变 | 可能只是延后 NaN，而不是根治 |
-| 路径 2 | 切换到 RotorS（ETH Zurich），重新适配多机 namespace 和 Python 节点 | 从根上解决数值稳定性问题，审稿认可度更高 | 需要重写 spawn、launch 和节点适配 |
-
-建议：如果目标是 IEEE TRO/T-AC 等顶刊，优先考虑路径 2；如果时间紧，先走路径 1 快速产出可用数据。
-
-### 1.4 路径 1 操作要点
-
-在 `teacher_controller.py` 的 odom 回调或 `control_step` 前增加 NaN/越界保护：
-
-```python
-def is_valid_odom(self, odom):
-    p = odom.pose.pose.position
-    if any(np.isnan([p.x, p.y, p.z])):
-        return False
-    if any(np.abs([p.x, p.y, p.z]) > 500):
-        return False
-    return True
-```
-
-同时将 `scene02_circle_4drones.launch` 中的角速度降低：
-
-```xml
-<param name="omega" value="0.2"/>
-```
-
-录制 bag 时不要长时间等待，启动稳定后尽快录制：
-
-```bash
-roslaunch drone_sim scene02_circle_4drones.launch gui:=false
-
-rosbag record -O ~/drone-formation-e2e/data/raw_bags/s2_circle_seed42.bag \
-  --duration=90 \
-  /drone{1..4}/p_des /drone{1..4}/v_des \
-  /drone{1..4}/ground_truth/state \
-  /drone{1..4}/cmd_vel /drone{1..4}/cmd_vel_teacher
-```
-
-## 2. 方法定位与论文核心决策
-
-### 2.1 方法定位：GCIL 而非纯 BC
-
-本文方法应定位为 Goal-Conditioned Imitation Learning（目标条件模仿学习，GCIL），不是传统 Behavioral Cloning（BC）。
-
-| 方法 | 输入信息 | 理论含义 |
+| 模块 | 实际状态 | 证据 |
 | --- | --- | --- |
-| 纯 BC | 只模仿 Teacher 的状态到动作映射 | 理论上难以超过 Teacher |
-| GCIL | Student 额外输入 `p_des` 和 `v_des` | Student 拥有 Teacher 不直接使用的目标信息，具备超过 Teacher 的合理性 |
+| 论文方法与实验设计文稿 | 已更新到 Word 原稿版本 | `docs/initial_part1.docx`, `docs/experiment.docx` |
+| 4 机仿真场景/Teacher 控制器 | 已实现并可生成 rosbag | `ros_ws/src/drone_sim/scripts/` |
+| rosbag 转 `.mat` | 已完成 | `scripts/bag_to_mat.py` |
+| MATLAB 数据集构建 | 已完成并已有产物 | `data/processed/dataset_*`, `norm_stats_*` |
+| 9D-LSTM 训练 | 已产出模型 | `data/trained_models/c1_lstm9d.mat` |
+| 15D-LSTM 训练 | 已产出模型 | `data/trained_models/c2_lstm15d.mat` |
+| 15D-BiLSTM 无注意力训练 | 已产出模型 | `data/trained_models/c3a_bilstm.mat` |
+| bag 轨迹/误差可视化 | 已完成 | `results/figures/*.png`, `*.pdf` |
 
-关键解释：Student 输入比 Teacher 多出期望位置和期望速度，形成非对称信息结构。这不是数据泄露，而是目标条件控制设计。
+### 尚未完成
 
-### 2.2 网络架构
+| 模块 | 当前问题 |
+| --- | --- |
+| `BiLSTM-DA` 最终模型 | `data/trained_models/c3_bidir_attn.mat` 不存在 |
+| 在线部署控制器 | `online_lstm_controller.py` 仍是占位推理 |
+| 论文主实验闭环评估 | 尚未形成 8 方法 x 多场景的真实结果矩阵 |
+| 统计显著性 | 没有 5 次独立运行均值/方差与 `p-value` |
+| 论文图表 | 当前大多是 bag 诊断图，不是论文最终对比图 |
 
-| 模块 | 规格 | 设计理由 |
+## 数据现状审计
+
+下面的统计来自直接运行 `scripts/bag_to_mat.py` 对现有 bag 的重新提取，不是旧文档抄写。
+
+| 场景 | bag 文件 | 干净样本数 | 现状判断 |
+| --- | --- | ---: | --- |
+| S1 Hover | `scene01_hover_4drones_seed42.bag` | 2396 | 4 机全部正常 |
+| S2 Circle | `s2_circle_4drones_seed42.bag` | 1798 | 仅 `drone3/4` 可用，`drone1/2` 全部失效 |
+| S2' Lemni | `scene02p_lemni_4drones_seed42.bag` | 3596 | 4 机都能提取到干净样本 |
+| S3 Reconfig | `scene03_reconfig_4drones_seed42.bag` | 3068 | `drone1/4` 样本严重截断 |
+| S4 Wind | `scene04_wind_4drones_seed42.bag` | 2269 | `drone2/3` 样本严重截断 |
+| S5 Longtime | `scene05_longtime_4drones_seed42.bag` | 4055 | `drone3/4` 样本严重截断 |
+
+`data/processed/` 中已有窗口化数据集，说明当前训练实际上是基于“**过滤 NaN 后保留下来的部分样本**”进行的，而不是基于完整、稳定、四机全可用的数据集。
+
+## 与论文目标的比对
+
+### 已对齐的部分
+
+| 论文要求 | 当前仓库情况 | 是否对齐 |
 | --- | --- | --- |
-| 输入层 | `15D x W=20`，包含 `p_des`、`v_des`、`p_actual`、`v_actual`、`e_p` | 同时提供目标、实际状态和误差 |
-| FA 特征注意力 | 对 15 维特征做 softmax 加权 | 放大关键误差特征，抑制噪声 |
-| BiLSTM x 2 | 每层 64 隐藏单元，`tanh` 激活 | 捕获双向时序信息 |
-| TA 时序注意力 | 对 `W=20` 时间步加权 | 聚焦轨迹转向等关键时刻 |
-| 全连接层 | 32 单元，`relu` | 融合高级时序特征 |
-| 输出层 | 4D `cmd_vel = [vx, vy, vz, wz]` | 匹配 hector twist 控制接口 |
+| 15D 输入使用 `u_teacher_xyz` | 代码已这样实现 | 是 |
+| `W=20`、`10 Hz`、`7:2:1` 划分 | 数据管线已这样实现 | 是 |
+| Teacher PD 数据生成链路 | 已实现 | 是 |
+| 9D / 15D / BiLSTM 无注意力训练脚本 | 已实现并已有模型 | 是 |
 
-### 2.3 Teacher PD 控制器
+### 未对齐的部分
 
-Teacher 保持纯 PD，不加入前馈、积分或学习项。这样可以保留可证明的稳态误差，并让 BiLSTM-DA 通过 GCIL 信息结构补足 Teacher 的不足。
-
-| 参数 | 值 | 含义 |
+| 论文要求 | 当前仓库情况 | 问题 |
 | --- | --- | --- |
-| `kp_h` | 2.0 | 水平位置误差增益 |
-| `kd_h` | 1.0 | 水平速度阻尼 |
-| `kp_z` | 2.5 | 垂直位置误差增益 |
-| `kd_z` | 1.2 | 垂直速度阻尼 |
-| `kyaw` | 0.5 | 偏航角速度阻尼 |
-| `k_rep` | 1.0 | 碰撞排斥力系数 |
-| `d_min` | 0.5 m | 碰撞排斥激活阈值 |
-| `umax_xy` | 2.5 m/s | 水平速度饱和 |
-| `umax_z` | 1.5 m/s | 垂直速度饱和 |
-
-### 2.4 对比矩阵
-
-| 方法 | 类别 | 说明 |
-| --- | --- | --- |
-| PID | 传统控制 | 无学习基线 |
-| 12D 优化 MPC | 模型预测控制 | 内部使用小波/FFT 频域特征，不是 LSTM 变体 |
-| Teacher PD | 数据生成器 | PD + 碰撞排斥 |
-| 9D-LSTM | 特征消融 | 去掉 `p_des/v_des` 目标引导 |
-| 15D-LSTM | 结构消融 | 有目标信息，但无双向结构 |
-| 15D-BiLSTM | 注意力消融 | 有 BiLSTM，无双注意力 |
-| 15D-BiLSTM-DA | Proposed | 完整 GCIL + BiLSTM + 双注意力 |
-
-重要修正：不要保留 “12D-LSTM”。原始文章中的 12D 是 MPC 内部特征设计，不是 LSTM 变体。
-
-## 3. 仿真环境与工作区
-
-### 3.1 环境栈
-
-| 层次 | 软件 | 版本/来源 | 状态 |
-| --- | --- | --- | --- |
-| 操作系统 | WSL2 Ubuntu | 20.04 | 正常 |
-| ROS | Noetic | apt 安装 | 正常 |
-| 物理引擎 | Gazebo | 11.15.1 | 正常 |
-| 四旋翼仿真包 | hector_quadrotor | `RAFALAMAO/hector-quadrotor-noetic` fork | 存在 NaN 不稳定 |
-| 主机硬件 | Intel Iris Xe | Win11 + WSL2，CPU-only | 训练需 CPU 模式 |
-
-### 3.2 工作区结构
-
-```text
-~/catkin_ws/
-  hector_quadrotor 源码编译工作区
-
-~/drone-formation-e2e/
-  ros_ws/src/drone_sim/
-    launch/
-      spawn_4drones.launch
-      scene01_hover_4drones.launch
-      scene02_circle_4drones.launch
-      scene02p_lemni_4drones.launch
-      scene03_reconfig_4drones.launch
-      scene04_wind_4drones.launch
-      scene05_longtime_4drones.launch
-    scripts/
-      teacher_controller.py
-      scene_driver.py
-      wind_driver.py
-  data/raw_bags/
-  scripts/
-    collect_seed42.sh
-    diagnose_bags.py
-    analyze_bags.py
-```
-
-### 3.3 关键 Topic
-
-| Topic | 类型 | 用途 |
-| --- | --- | --- |
-| `/droneN/p_des` | 期望位置 | GCIL 目标输入 |
-| `/droneN/v_des` | 期望速度 | GCIL 目标输入 |
-| `/droneN/ground_truth/state` | 实际状态 | 位置、速度、误差计算 |
-| `/droneN/cmd_vel` | Student/控制输出 | 在线控制接口 |
-| `/droneN/cmd_vel_teacher` | Teacher 标签 | 训练监督信号 |
-
-## 4. 实验场景设计
-
-### 4.1 编队几何
-
-4 机矩形编队以编队中心 `c(t)` 为基准，各机固定偏移：
-
-| 无人机 | 相对偏移 |
-| --- | --- |
-| `drone1` | `(+0.5, +0.5, 0)` |
-| `drone2` | `(+0.5, -0.5, 0)` |
-| `drone3` | `(-0.5, +0.5, 0)` |
-| `drone4` | `(-0.5, -0.5, 0)` |
-
-相邻机间距 1.0 m，对角线 1.414 m，均大于 `d_min=0.5 m`。
-
-### 4.2 场景列表
-
-| 场景 | 内容 | 时长建议 | 目标 |
-| --- | --- | --- | --- |
-| S1 | 悬停 | 60 s | 验证静态稳定性 |
-| S2 | 圆形轨迹 | 90 s | 主测试场景 |
-| S2' | 八字轨迹 | 90 s | 曲率变化和泛化 |
-| S3 | 编队重构 | 120 s | 队形切换稳定性 |
-| S4 | 风扰 | 90 s | 抗扰能力 |
-| S5 | 长航时 | 180 s | 漂移和长期稳定性 |
-
-### 4.3 风扰模型
-
-风场可按如下形式建模：
+| 最终 `BiLSTM-DA` 模型 | 缺失 `c3_bidir_attn.mat` | 主方法尚未真正训练完成 |
+| 在线 Student 推理与软硬切换 | `online_lstm_controller.py` 仍输出 `0.1 * latest_state[:4]` | 闭环部署未实现 |
+| 完整 8 方法主对比 | 只有早期 `c1_lstm9d` bootstrap 记录 | 论文主结果尚未落地 |
+| 5 次独立运行统计 | 没有 | 无法支撑论文表 5.8 及显著性检验 |
+| PID/MPC/Teacher/学习方法统一评估 | 没有统一评估产物 | 对比矩阵不完整 |
+| 长航时 0 次硬切换、`alpha` 曲线 | 没有部署级日志 | 论文部署结论未验证 |
 
-```text
-v_wind_x(t) = v_mean + A * sin(2πft) + n_x(t)
-v_wind_y(t) = v_mean + A * sin(2πft + φ) + n_y(t), φ = π/2
-F = k_wind * v_wind
-```
+## 当前实验最主要的问题
 
-## 5. 数据采集流水线
+### 1. 旧的实验说明已经过期
 
-目标是完成 `5 场景 x 5 种子 = 25 个 bag`。
+此前根目录存在多个相互重叠的阶段文档，其中最核心的问题是它们把当前状态描述成“动态 bag 全坏，训练还没开始”。这已经不准确。现在的真实情况是：
 
-推荐种子：
+- 动态场景确实存在严重数值爆炸和轨迹漂移
+- 但仓库已经基于样本过滤提取出了可训练数据
+- 数据不是“完全不可用”，而是“**部分无人机、部分时段可用**”
 
-```text
-42, 123, 256, 512, 1024
-```
+这意味着当前阶段不是“完全卡死”，而是“已经进入离线训练中段，但数据质量仍不足以支撑论文最终结论”。
 
-每次录制必须包含 20 个 topic：
+### 2. 旧文档之间互相矛盾
 
-```bash
-/drone{1..4}/p_des
-/drone{1..4}/v_des
-/drone{1..4}/ground_truth/state
-/drone{1..4}/cmd_vel
-/drone{1..4}/cmd_vel_teacher
-```
+此前根目录旧文件里同时存在这些互相冲突的说法：
 
-批量采集逻辑：
+- 有的文档说 15D 最后 3 维是 `e_p`
+- 有的文档说 15D 最后 3 维是 `u_teacher_xyz`
+- 有的文档说 Teacher 只在数据生成阶段使用
+- 论文正文现在明确写的是部署阶段 Teacher 仍在线参与融合
+- 有的文档说 MATLAB 训练还没开始
+- 但实际仓库里已经有 `c1/c2/c3a` 三个模型产物
 
-1. 清理 Gazebo、ROS、rosbag 残留进程。
-2. 启动对应场景 launch。
-3. 等待 10-15 s，确认 4 架无人机均有 `cmd_vel`。
-4. 按场景时长录制 bag。
-5. 运行 `diagnose_bags.py` 验证坐标范围和消息数量。
+如果不清掉这些冲突，后续实验会继续沿着错误目标推进。
 
-质量判断标准：
+### 3. 数据质量不足以直接宣称论文结果成立
 
-| 检查项 | 合格标准 |
-| --- | --- |
-| 坐标范围 | 所有坐标在 `±20 m` 内 |
-| NaN/Inf | 不允许出现 |
-| 消息频率 | `ground_truth/state` 约等于时长 x 83 条 |
-| 轨迹图 | 与场景设计一致，无瞬移和爆炸 |
+当前 bag 的问题不是只有 NaN：
 
-## 6. MATLAB 数据预处理
+- `S2` 圆形场景中，最关键的主实验场景只有 2 架机保留了样本
+- `S4/S5` 里有明显飞离、坠落或归零现象
+- 样本是事后过滤出来的，不是完整闭环稳定运行得到的
 
-### 6.1 15D 特征向量
+这意味着现有数据能支撑“原型训练”和“数据管线验证”，但还不能严肃支撑论文中关于多场景稳定性、四机全编队一致性、长航时零接管和风扰鲁棒性的结论。
 
-| 维度 | 内容 |
-| --- | --- |
-| 1-3 | `p_des = [x_des, y_des, z_des]` |
-| 4-6 | `v_des = [vx_des, vy_des, vz_des]` |
-| 7-9 | `p_actual = [x, y, z]` |
-| 10-12 | `v_actual = [vx, vy, vz]` |
-| 13-15 | `e_p = p_des - p_actual` |
+### 4. 部署链路基本还没开始
 
-输出标签为 4D：
+当前最关键的缺口不是再写一个训练脚本，而是部署没有打通：
 
-```text
-cmd_vel = [vx, vy, vz, wz]
-```
+- `online_lstm_controller.py` 是模板
+- 配置文件仍和论文参数不一致
+- 没有真实的 normalization / model loading / rolling window inference
+- 没有 Teacher-Student 软硬切换实现
 
-标签来自 `/droneN/cmd_vel_teacher`。
+所以现在的“实验做到什么程度”更准确地说是：
 
-### 6.2 滑动窗口采样
+`Teacher 数据生成 + 数据集构建 + 前 3 个离线模型训练完成`
 
-采样周期 `Δt=0.1 s`，窗口长度 `W=20`，对应 2 秒历史：
+而不是：
 
-```text
-X_k = [x_{k-W+1}, ..., x_k]  ->  u_k
-```
+`论文实验已完成，只差画图`
 
-9D 消融实验只保留第 7-15 维，即实际位置、速度和误差，去掉目标信息。
+### 5. 配置文件仍有明显占位值
 
-### 6.3 归一化与划分
+当前 `configs/*.yaml` 里至少有这些和论文/代码不一致的问题：
 
-对每个维度单独做零均值单位方差归一化：
+- `sample_time: 0.02`，而论文与数据管线使用的是 `0.1 s`
+- `c3_bidir_attn.yaml` 里 `sequence_length: 30`，而训练数据用的是 `20`
+- `stats_file` 写成 `data/processed/normalization_stats.mat`，但实际文件是 `norm_stats_9d.mat` / `norm_stats_15d.mat`
 
-```text
-x_norm = (x - mu_X) / sigma_X
-u_norm = (u - mu_U) / sigma_U
-```
+这些问题说明部署配置还停留在模板阶段。
 
-训练集、验证集、测试集按 `7:2:1` 划分，并保证各场景样本均匀分布。
+## 结果与论文现象的比对
 
-保存文件建议：
+### 当前已经观察到的现象
 
-```text
-samples_15d_W20_all_scenes.mat
-  X_train, U_train
-  X_val, U_val
-  X_test, U_test
-  mu_X, sig_X, mu_U, sig_U
-  meta
-```
+- S1 悬停数据稳定，说明基础仿真链路没问题
+- S2/S4/S5 中部分无人机会大范围漂移或爆炸，说明动态场景稳定性仍是核心问题
+- 经过 NaN/Inf 过滤后，仍能得到约 `17182` 条样本并训练出 3 个模型
+- 现有 `results/figures/` 主要是 bag 的实际轨迹图和误差图，证明场景确实跑过，但不是论文最终模型对比图
 
-## 7. LSTM 模型训练
+### 和论文目标相比，哪些对，哪些不对
 
-### 7.1 训练配置
+对的部分：
 
-| 超参数 | 值 |
-| --- | --- |
-| 优化器 | Adam |
-| 初始学习率 | `1e-3` |
-| 学习率衰减 | 每 10 epoch x 0.9 |
-| Batch size | 64 |
-| 最大 epoch | 50 |
-| Early stopping patience | 5 |
-| Dropout | 0.2 |
+- 论文的理论主线已经体现在代码里：Teacher 数据、15D 目标引导输入、BiLSTM/注意力训练脚本都已存在
+- 论文实验矩阵的雏形已经搭好：场景、数据、训练、评估脚本目录都齐
 
-### 7.2 损失函数
+不对的部分：
 
-采用 4 通道加权 MSE，高度通道权重更大：
+- 论文主方法 `BiLSTM-DA` 的最终闭环结果还没有实际产出
+- 论文中的很多数值仍是文稿中的目标值或占位值，不是当前仓库真实跑出来的结果
+- 当前数据质量和四机一致性不足以直接复现论文第 5 章的强结论
 
-```text
-L = alpha_xy * (||vx_pred - vx_T||^2 + ||vy_pred - vy_T||^2)
-  + alpha_z  * ||vz_pred - vz_T||^2
-  + alpha_r  * ||wz_pred - wz_T||^2
+## 下一步应该怎么完成
 
-alpha_z > alpha_xy >= alpha_r
-```
+建议按下面顺序推进，而不是继续堆新的临时说明文件。
 
-### 7.3 训练顺序
+### 阶段 1：先把“真实可用数据”问题收口
 
-| 顺序 | 模型 | 输入维度 | CPU-only 估计时间 |
-| --- | --- | --- | --- |
-| 1 | 9D-LSTM | `9D x W=20` | 约 1 h / seed |
-| 2 | 15D-LSTM | `15D x W=20` | 约 1.5 h / seed |
-| 3 | 15D-BiLSTM | `15D x W=20` | 约 2 h / seed |
-| 4 | 15D-BiLSTM-DA | `15D x W=20` | 约 2.5 h / seed |
-
-全部 `4 模型 x 5 seeds = 20` 次训练，CPU 总时间约 140-160 小时，建议使用 `screen` 或 `tmux` 后台运行。
-
-模型包需要保存：
-
-```matlab
-save('model_package_15d_biDA_seed42.mat', ...
-     'net', ...
-     'mu_X', 'sig_X', 'mu_U', 'sig_U', ...
-     'W', ...
-     'D');
-```
-
-## 8. 评估指标与图表
-
-### 8.1 主要指标
-
-| 指标 | 含义 |
-| --- | --- |
-| 3D RMSE | 主排序指标，越小越好 |
-| 高度 RMSE | 单独评估 z 方向控制 |
-| 60 s 后漂移率 | 衡量长期稳定性 |
-| 最大 3D 误差 | 衡量最差情况 |
-| `cmd_vel` 波动 | 衡量控制平滑性 |
-
-### 8.2 论文图表清单
-
-| 图序 | 内容 |
-| --- | --- |
-| 图 5.1 | S2 圆形 XY 轨迹对比 |
-| 图 5.2 | 3D 位置误差时序，包含 60 s 漂移检查线 |
-| 图 5.3 | 高度 `z(t)` 对比 |
-| 图 5.4 | `cmd_vel` 四通道波形 |
-| 图 5.5 | RMSE/MAE/max 误差统计柱状图 |
-| 图 5.6 | S3 重构时的 3D 误差时序 |
-| 图 5.7 | S4 风扰下的 XY 轨迹和误差对比 |
-| 图 5.8 | S5 长航时完整误差曲线 |
-| 图 5.9 | 6 场景综合 overview |
-
-图表样式建议：Times New Roman、四边框、内向刻度、色盲友好配色、300 dpi PNG + PDF。
-
-## 9. 论文修改清单
-
-| 位置 | 问题 | 修改方案 | 优先级 |
-| --- | --- | --- | --- |
-| §4.1 | 定位为纯 BC，缺少 GCIL 理论支撑 | 重写为 GCIL 框架，引用 Codevilla 2018、Ding 2019 | P0 |
-| 对比矩阵 | 包含不存在的 12D-LSTM | 删除 12D-LSTM，保留 12D-MPC 作为独立基线 | P0 |
-| 全文数值 | 存在 `X.XX` 占位符 | 复现后填入真实实验数据 | P0 |
-| Appendix A | 缺少 PD 稳态误差推导 | 新增圆周轨迹下 PD 控制器误差推导 | P1 |
-| §5.2.6 | Teacher RMSE 与上下文不一致 | 明确该值是相对期望轨迹还是相对 LSTM | P1 |
-
-审稿常见问题准备：
-
-| 问题 | 回答要点 |
-| --- | --- |
-| Student 为什么能超过 Teacher？ | 因为 GCIL 中 Student 输入包含 `p_des/v_des`，Teacher PD 不直接使用该目标条件，信息结构不同 |
-| Teacher 是否太弱？ | 纯 PD 对圆周轨迹存在可证明稳态误差，这是本文要克服的理论瓶颈 |
-| 为什么不用 12D-LSTM？ | 12D 是 MPC 内部频域特征，不是 LSTM 特征变体 |
-| 5 个种子是否足够？ | 5 seeds x 5 场景 = 25 个独立实验，可报告均值和标准差 |
-
-## 10. 完整复现步骤
-
-### STEP 1：解决 NaN Bug（P0 阻塞）
-
-优先完成以下任一路径：
-
-- 路径 1：修改 `teacher_controller.py` 增加 NaN 保护，降低 `omega`，重新编译并测试。
-- 路径 2：切换 RotorS，重写 `spawn_4drones.launch` 并适配 Python 节点。
-
-验证标准：S2 圆形运行 120 s，所有坐标合理，`sync_check.py` 显示编队误差稳定。
-
-### STEP 2：重新录制 seed=42 的 5 个场景
-
-录制后运行：
-
-```bash
-python3 ~/drone-formation-e2e/scripts/diagnose_bags.py
-python3 ~/drone-formation-e2e/scripts/analyze_bags.py
-```
-
-确认所有坐标在合理范围内，轨迹图与场景设计一致。
-
-### STEP 3：扩展到 5 个种子
-
-将 `collect_seed42.sh` 扩展为 `collect_all_seeds.sh`，完成 25 个 bag 录制。
-
-### STEP 4：预处理为训练样本
-
-实现 `bag_to_mat.m` 或 Python 版本，提取 15D 特征、4D 标签、滑动窗口和归一化参数。
-
-### STEP 5：训练 4 个模型变体
-
-按顺序训练：
-
-```text
-9D-LSTM -> 15D-LSTM -> 15D-BiLSTM -> 15D-BiLSTM-DA
-```
-
-每次训练记录验证集 loss、早停 epoch 和测试 RMSE。
-
-### STEP 6：离线评估并生成图表
-
-计算所有模型在测试集上的 3D RMSE、高度 RMSE、漂移率、最大误差和控制波动，生成论文图表。
-
-### STEP 7：填写论文数值
-
-用真实复现实验结果替换所有 `X.XX`，检查 12D-LSTM 是否已删除、图表是否一致、结论是否有数据支撑。
-
-## 11. 原始文章关键参考值
-
-以下数值仅用于对比，复现完成后应替换为真实结果。
-
-| 来源 | 数据 | 用途 |
-| --- | --- | --- |
-| §5.2.6 | LSTM RMSE = 2.154 m；Teacher RMSE = 9.134 m | 对比 Student 与 Teacher |
-| §5.2.2 | Teacher 相对 LSTM 的 RMSE 约 6.56 m | 注意这是控制器之间误差，不是相对期望轨迹 |
-| Table 5.4 | 12D 优化 MPC 3D 误差 = 0.48 m | MPC 强基线 |
-| §3.5 | 12D 增强模型 = 小波 + FFT 融合 | 澄清 12D 属于 MPC 内部设计 |
-| §5.3.4 | 9D 普通 LSTM 整体 RMSE = 1.57 m | 特征消融参考 |
-| §5.3.4 | 15D 防漂移 LSTM RMSE = 0.30 m | 完整模型参考 |
-
-注意：`0.08 m`、`2.5 m`、`0.03 m` 等应视为预期目标或占位值，不能作为已验证结论直接写入论文。
-
-## 12. 常用命令速查
-
-### 12.1 环境启动
-
-```bash
-source /opt/ros/noetic/setup.bash
-source ~/catkin_ws/devel/setup.bash
-source ~/drone-formation-e2e/ros_ws/devel/setup.bash
-
-roslaunch drone_sim scene02_circle_4drones.launch gui:=false
-```
-
-### 12.2 实时验证
-
-```bash
-rostopic hz /drone1/cmd_vel
-
-for i in 1 2 3 4; do
-  echo "drone$i:"
-  rostopic echo /drone$i/ground_truth/state/pose/pose/position -n 1
-done
-
-python3 /tmp/sync_check.py
-```
-
-### 12.3 Bag 操作
-
-```bash
-rosbag record -O ~/drone-formation-e2e/data/raw_bags/s2_circle.bag \
-  --duration=90 \
-  /drone{1..4}/p_des /drone{1..4}/v_des \
-  /drone{1..4}/ground_truth/state \
-  /drone{1..4}/cmd_vel /drone{1..4}/cmd_vel_teacher
-
-rosbag info ~/drone-formation-e2e/data/raw_bags/s2_circle.bag
-
-python3 ~/drone-formation-e2e/scripts/diagnose_bags.py
-python3 ~/drone-formation-e2e/scripts/analyze_bags.py
-```
-
-### 12.4 编译 ROS 工作区
-
-```bash
-cd ~/drone-formation-e2e/ros_ws
-catkin_make
-source devel/setup.bash
-
-chmod +x ~/drone-formation-e2e/ros_ws/src/drone_sim/scripts/*.py
-```
-
-### 12.5 进程清理
-
-```bash
-killall -9 gzserver gzclient rosmaster roscore rosout 2>/dev/null
-pkill -9 -f "scene_driver|teacher_controller|enable_motors|wind_driver|rosbag" 2>/dev/null
-sleep 4
-```
-
-## 13. Word/Git 工作流
-
-本仓库仍保留 Word 文档编辑和 Git 归档流程。
-
-### 13.1 推荐结构
-
-```text
-docs/       Word 主文档
-snapshots/ 里程碑 PDF 或截图
-```
-
-### 13.2 VS Code 编辑 Word
-
-安装 SuperDoc：
-
-```powershell
-code --install-extension superdoc-dev.superdoc-vscode-ext
-```
-
-### 13.3 Git LFS
-
-`.docx` 文件建议通过 Git LFS 管理：
-
-```powershell
-git lfs install --local
-```
-
-### 13.4 常用 Git 命令
-
-```powershell
-git status
-git add .
-git commit -m "update experiment readme and documents"
-git push
-```
+1. 重新定义数据合格标准：主实验场景至少保证 4 机全时段可用，不能靠大量事后过滤支撑结论。
+2. 针对 `S2/S4/S5` 重新评估是否需要重录 bag。
+3. 如果继续使用 `hector_quadrotor`，要先验证：
+   - 4 机都不爆炸
+   - 90 s / 180 s 内不出现大范围漂移
+   - 主实验至少在 `S2` 上拿到完整四机数据
+4. 如果始终做不到，尽快转向更稳定的仿真底座，而不是继续在坏数据上训练。
+
+### 阶段 2：补齐主方法训练
+
+1. 查清 `c3_bidir_attn.mat` 为什么没有生成。
+2. 跑通 `BiLSTM-DA` 训练并保存最终模型。
+3. 保存训练日志、验证曲线和模型配置快照。
+
+### 阶段 3：打通在线部署
+
+1. 先修正 `configs/*.yaml` 和论文/数据管线的参数不一致。
+2. 在 `online_lstm_controller.py` 中实现：
+   - 正确读取 normalization 参数
+   - 滑动窗口维护
+   - 加载训练好的模型
+   - 真实推理输出
+3. 再实现 Teacher-Student：
+   - 软切换
+   - 硬切换
+   - 漂移检测
+   - 长航时滑窗重置
+
+### 阶段 4：重新定义“论文实验完成”的标准
+
+只有以下 4 类产物都齐了，才能说实验部分真正完成：
+
+1. **主结果**
+   - `S2` 下 8 方法统一评估表
+   - 至少 5 次独立运行统计
+2. **消融结果**
+   - 特征、双向、注意力、部署机制四组消融
+3. **鲁棒性/长航时**
+   - `S4` 风扰
+   - `S5` 长航时
+   - `alpha` 和切换日志
+4. **论文图表**
+   - 真正来自评估结果的表和图，而不是 bag 诊断图
+
+## 目录说明
+
+- `configs/`: 控制器配置，当前仍有部分模板值待修正
+- `data/`: raw bags、processed datasets、trained models
+- `docs/`: 论文正文和实验设计 Word 原稿
+- `matlab/`: 数据处理、训练和评估脚本
+- `results/`: 当前 bag 诊断图和少量早期 run 记录
+- `ros_ws/`: ROS 工作空间
+- `scripts/`: rosbag 转换、诊断、可视化与复现实验入口
+
+## 一句话结论
+
+这个仓库现在已经完成了论文实验的“离线前半程”，但还没有进入“论文结果可交付”的状态。最关键的不是继续扩写计划，而是用稳定四机数据补齐 `BiLSTM-DA` 训练、在线部署和统一评估。
