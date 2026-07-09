@@ -1,18 +1,18 @@
 function train_all_models(dataDir, modelDir)
-%TRAIN_ALL_MODELS  批量训练所有 LSTM 对比方法
-%
-% 用法（Windows MATLAB）：
-%   cd('\\wsl.localhost\Ubuntu-20.04\home\jiuyao\drone-formation-e2e')
-%   addpath('matlab/data_pipeline','matlab/train')
-%   train_all_models('data/processed','data/trained_models')
-%
-% 训练顺序：C1(9D-LSTM) → C2(15D-LSTM) → C3a(BiLSTM) → C3(BiLSTM-DA)
+%TRAIN_ALL_MODELS Train all model variants used in the MATLAB experiments.
 
-if nargin < 1; dataDir  = 'data/processed'; end
-if nargin < 2; modelDir = 'data/trained_models'; end
+thisDir = fileparts(mfilename('fullpath'));
+matlabDir = fileparts(thisDir);
+projectRoot = fileparts(matlabDir);
 
-addpath('matlab/data_pipeline');
-addpath('matlab/train');
+if nargin < 1; dataDir = fullfile(projectRoot, 'data', 'processed'); end
+if nargin < 2; modelDir = fullfile(projectRoot, 'data', 'trained_models'); end
+
+dataDir = resolve_project_path(projectRoot, dataDir);
+modelDir = resolve_project_path(projectRoot, modelDir);
+
+ensure_path(fullfile(matlabDir, 'data_pipeline'));
+ensure_path(fullfile(matlabDir, 'train'));
 
 if ~isfolder(modelDir); mkdir(modelDir); end
 
@@ -31,4 +31,23 @@ train_lstm_bidir_attn(dataDir, fullfile(modelDir, 'c3_bidir_attn.mat'));
 
 fprintf('\n[train_all_models] DONE. Total elapsed: %.1fs\n', toc(t0));
 fprintf('Models saved in: %s\n', modelDir);
+end
+
+function p = resolve_project_path(projectRoot, p)
+if ~(ischar(p) || isstring(p))
+    return;
+end
+
+p = char(p);
+if startsWith(p, '\\') || startsWith(p, '/') || ~isempty(regexp(p, '^[A-Za-z]:[\\/]', 'once'))
+    return;
+end
+
+p = fullfile(projectRoot, p);
+end
+
+function ensure_path(p)
+if ~contains([path pathsep], [char(p) pathsep])
+    addpath(p);
+end
 end

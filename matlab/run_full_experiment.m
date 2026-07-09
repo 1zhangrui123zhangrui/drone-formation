@@ -1,28 +1,23 @@
-%RUN_FULL_EXPERIMENT  一键运行完整实验流程
+%RUN_FULL_EXPERIMENT Run dataset prep, training, and a quick inference check.
 %
-% 前置条件（WSL2 端已完成）：
-%   python3 scripts/bag_to_mat.py <each_bag> data/processed/raw/<scene>.mat
-%   (已为所有 scene 生成 .mat 文件)
-%
-% 运行方式（Windows MATLAB 命令行）：
+% Example from Windows MATLAB:
 %   cd('\\wsl.localhost\Ubuntu-20.04\home\jiuyao\drone-formation-e2e')
 %   run matlab/run_full_experiment.m
-%
-% 步骤：
-%   1. 数据准备：合并所有 raw .mat → normalize → sliding window → train/val/test split
-%   2. 训练四个模型：C1(9D-LSTM) C2(15D-LSTM) C3a(BiLSTM) C3(BiLSTM-DA)
-%   3. 快速推理验证：用测试集第一个样本检查输出是否合理
 
 clear; clc;
-addpath('matlab/data_pipeline', 'matlab/train', 'matlab/evaluation');
 
-ROOT = fileparts(mfilename('fullpath'));  % matlab/ dir
-% 若从项目根目录运行则 ROOT 为空，dataDir 直接用相对路径
-DATA_DIR  = 'data/processed';
-MODEL_DIR = 'data/trained_models';
-RAW_DIR   = fullfile(DATA_DIR, 'raw');
+scriptDir = fileparts(mfilename('fullpath'));  % .../matlab
+projectRoot = fileparts(scriptDir);
 
-%% Step 1: 数据准备
+ensure_path(fullfile(scriptDir, 'data_pipeline'));
+ensure_path(fullfile(scriptDir, 'train'));
+ensure_path(fullfile(scriptDir, 'evaluation'));
+
+DATA_DIR = fullfile(projectRoot, 'data', 'processed');
+MODEL_DIR = fullfile(projectRoot, 'data', 'trained_models');
+RAW_DIR = fullfile(DATA_DIR, 'raw');
+
+%% Step 1: dataset preparation
 if ~isfile(fullfile(DATA_DIR, 'dataset_15d_train.mat'))
     fprintf('=== Step 1: prepare_all_datasets ===\n');
     prepare_all_datasets(RAW_DIR, DATA_DIR);
@@ -32,11 +27,11 @@ else
     fprintf('  train windows: %d  (W=%d, D=%d)\n', size(tr.X,3), size(tr.X,1), size(tr.X,2));
 end
 
-%% Step 2: 训练所有模型
+%% Step 2: training
 fprintf('\n=== Step 2: train_all_models ===\n');
 train_all_models(DATA_DIR, MODEL_DIR);
 
-%% Step 3: 推理验证
+%% Step 3: inference check
 fprintf('\n=== Step 3: inference check ===\n');
 teRaw = load(fullfile(DATA_DIR, 'dataset_15d_test.mat')); te = teRaw.te;
 x_test = squeeze(te.X(:,:,1))';  % [D=15, W=20]
@@ -64,3 +59,9 @@ fprintf('  1. Evaluate models on test sets: compute_metrics(p_actual, p_des)\n')
 fprintf('  2. Run build_comparison_table(results) to generate Table 1\n');
 fprintf('  3. Run ablation_table(r9,r15,rbi,rda) to generate Table 2\n');
 fprintf('  4. Run plot_all_figures to generate IEEE figures\n');
+
+function ensure_path(p)
+if ~contains([path pathsep], [char(p) pathsep])
+    addpath(p);
+end
+end
