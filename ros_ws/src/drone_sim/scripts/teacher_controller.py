@@ -41,6 +41,7 @@ class TeacherController:
         self.rate_hz = rospy.get_param('~rate', 10)
         self.num_drones = rospy.get_param('~num_drones', 4)
         self.startup_wait = rospy.get_param('~startup_wait', 5.0)
+        self.publish_world_cmd = rospy.get_param('~publish_world_cmd', True)
 
         # 状态缓存
         self.odoms = [None] * self.num_drones
@@ -48,7 +49,7 @@ class TeacherController:
         self.v_des = [None] * self.num_drones
 
         rospy.loginfo(f'[teacher] init: N={self.num_drones}, kp_h={self.kp_h}, kd_h={self.kd_h}, '
-                      f'kp_z={self.kp_z}, kd_z={self.kd_z}')
+                      f'kp_z={self.kp_z}, kd_z={self.kd_z}, publish_world_cmd={self.publish_world_cmd}')
         rospy.loginfo(f'[teacher] sleeping {self.startup_wait}s (wall time) to let 4-drone spawn complete...')
         time.sleep(self.startup_wait)
         rospy.loginfo('[teacher] setting up subscribers...')
@@ -67,6 +68,7 @@ class TeacherController:
             ns_d = f'/drone{i+1}'
             self.pub_cmd_world.append(
                 rospy.Publisher(f'{ns_d}/command/twist', TwistStamped, queue_size=10)
+                if self.publish_world_cmd else None
             )
             self.pub_teacher.append(rospy.Publisher(f'{ns_d}/cmd_vel_teacher', Twist, queue_size=10))
 
@@ -177,7 +179,8 @@ class TeacherController:
                 msg_teacher.linear.z = v_z
                 msg_teacher.angular.z = w_z
 
-                self.pub_cmd_world[i].publish(msg_world)
+                if self.pub_cmd_world[i] is not None:
+                    self.pub_cmd_world[i].publish(msg_world)
                 self.pub_teacher[i].publish(msg_teacher)
                 n_published += 1
 
@@ -189,8 +192,9 @@ class TeacherController:
                     p = 'p' if self.p_des[i] is not None else '-'
                     v = 'v' if self.v_des[i] is not None else '-'
                     stats.append(f"d{i+1}:{o}{p}{v}")
+                mode = 'world+label' if self.publish_world_cmd else 'label-only'
                 rospy.loginfo(f'[teacher t={t_elapsed:.1f}s] data status: {" ".join(stats)}, '
-                              f'cmd_vel published: {n_published}/{self.num_drones}')
+                              f'outputs={mode}, published: {n_published}/{self.num_drones}')
 
             try:
                 r.sleep()

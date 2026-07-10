@@ -9,6 +9,11 @@ thisDir = fileparts(mfilename('fullpath'));
 matlabDir = fileparts(thisDir);
 projectRoot = fileparts(matlabDir);
 
+% Offline evaluation may need to deserialize trained networks containing
+% custom attention layers defined under matlab/train.
+ensure_path(fullfile(matlabDir, 'train'));
+ensure_path(fullfile(matlabDir, 'evaluation'));
+
 if nargin < 1; dataDir = fullfile(projectRoot, 'data', 'processed'); end
 if nargin < 2; modelDir = fullfile(projectRoot, 'data', 'trained_models'); end
 if nargin < 3; outDir = fullfile(projectRoot, 'data', 'eval_results', 'offline'); end
@@ -151,4 +156,10 @@ if startsWith(p, '\\') || startsWith(p, '/') || ~isempty(regexp(p, '^[A-Za-z]:[\
 end
 
 p = fullfile(projectRoot, p);
+end
+
+function ensure_path(p)
+if ~contains([path pathsep], [char(p) pathsep])
+    addpath(p);
+end
 end

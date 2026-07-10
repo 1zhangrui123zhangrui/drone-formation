@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- S2 student pilot: Teacher stays online for /cmd_vel_teacher labels only. -->
+  <arg name="gui" default="false"/>
+  <arg name="radius" default="3.0"/>
+  <arg name="omega" default="0.2"/>
+  <arg name="z_target" default="1.8"/>
+
+  <include file="$(find drone_sim)/launch/scene02_circle_4drones.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="radius" value="$(arg radius)"/>
+    <arg name="omega" value="$(arg omega)"/>
+    <arg name="z_target" value="$(arg z_target)"/>
+    <arg name="teacher_publish_world_cmd" value="false"/>
+  </include>
+</launch>

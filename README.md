@@ -29,14 +29,18 @@
 | 9D-LSTM 训练 | 已产出模型 | `data/trained_models/c1_lstm9d.mat` |
 | 15D-LSTM 训练 | 已产出模型 | `data/trained_models/c2_lstm15d.mat` |
 | 15D-BiLSTM 无注意力训练 | 已产出模型 | `data/trained_models/c3a_bilstm.mat` |
+| 15D-BiLSTM-DA 训练 | 已产出模型 | `data/trained_models/c3_bidir_attn.mat` |
+| canonical test set 离线评测 | 已完成 | `data/eval_results/offline/offline_summary.csv` |
+| 训练留痕审计 | 已完成 | `data/eval_results/training_audit/training_audit.csv` |
+| MATLAB 最小在线推理链路 | 已实现 `c1/c3a` 专用入口 | `matlab/deployment/run_online_model_controller.m` |
 | bag 轨迹/误差可视化 | 已完成 | `results/figures/*.png`, `*.pdf` |
 
 ### 尚未完成
 
 | 模块 | 当前问题 |
 | --- | --- |
-| `BiLSTM-DA` 最终模型 | `data/trained_models/c3_bidir_attn.mat` 不存在 |
-| 在线部署控制器 | `online_lstm_controller.py` 仍是占位推理 |
+| `BiLSTM-DA` 最终模型 | checkpoint 已存在，但当前离线效果明显落后于 `c1/c3a`，不能直接当作论文主方法结果 |
+| 在线部署控制器 | Python 占位节点仍未打通；当前最小可用链路改为 MATLAB + ROS Toolbox，仅覆盖 `c1/c3a` |
 | 论文主实验闭环评估 | 尚未形成 8 方法 x 多场景的真实结果矩阵 |
 | 统计显著性 | 没有 5 次独立运行均值/方差与 `p-value` |
 | 论文图表 | 当前大多是 bag 诊断图，不是论文最终对比图 |
@@ -59,11 +63,11 @@
 | S4 Wind | `scene04_wind_4drones_v2.bag` | 3581 | 4 机全部通过审计 |
 | S5 Longtime | `scene05_longtime_4drones_v2.bag` | 7188 | 4 机全部通过审计 |
 
-`data/processed/` 已于 `2026-07-09` 夜间基于上述 6 个 `v2` bag 重新生成，当前构建结果是：
+`data/processed/` 已基于上述 6 个 `v2` bag 重新生成。需要注意的是，`2026-07-10` 起正式采用了更严格的数据集构建协议：按 `scene × drone × 连续时间段` 切窗、split 之间保留 `W-1` guard rows、并且只用 train split 计算归一化统计。当前构建结果是：
 
 - 原始样本总数：`25102`
-- `15D` 窗口总数：`25083`
-- 划分结果：`train=17558`, `val=5017`, `test=2508`
+- `15D` 窗口总数：`22812`
+- 划分结果：`train=16471`, `val=4381`, `test=1960`
 - 构建留痕文件：`data/processed/dataset_build_manifest.json`
 
 ## 与论文目标的比对
@@ -81,12 +85,25 @@
 
 | 论文要求 | 当前仓库情况 | 问题 |
 | --- | --- | --- |
-| 最终 `BiLSTM-DA` 模型 | 缺失 `c3_bidir_attn.mat` | 主方法尚未真正训练完成 |
-| 在线 Student 推理与软硬切换 | `online_lstm_controller.py` 仍输出 `0.1 * latest_state[:4]` | 闭环部署未实现 |
+| 最终 `BiLSTM-DA` 模型 | `c3_bidir_attn.mat` 已训练完成，但当前 canonical test set 上显著落后于 `c1/c3a` | 不能直接写成论文主结果 |
+| 在线 Student 推理与软硬切换 | 已有 `c1/c3a` 的最小 MATLAB 闭环推理链路，但完整 Teacher-Student 软/硬切换仍未实现 | 只能用于 `S2` student pilot，不能当作论文最终部署结果 |
 | 完整 8 方法主对比 | 只有早期 `c1_lstm9d` bootstrap 记录 | 论文主结果尚未落地 |
 | 5 次独立运行统计 | 没有 | 无法支撑论文表 5.8 及显著性检验 |
 | PID/MPC/Teacher/学习方法统一评估 | 没有统一评估产物 | 对比矩阵不完整 |
 | 长航时 0 次硬切换、`alpha` 曲线 | 没有部署级日志 | 论文部署结论未验证 |
+
+### 当前 canonical 数据上的离线结论
+
+当前基于 `data/processed/` canonical test split 的统一离线评测结果为：
+
+| 模型 | `rmse_mean` | 结论 |
+| --- | ---: | --- |
+| `c3a_bilstm` | `0.012627` | 当前离线最优 |
+| `c1_lstm9d` | `0.013841` | 次优，作为简洁基线仍值得进入闭环 pilot |
+| `c2_lstm15d` | `0.015581` | 当前不作为第一优先级闭环对象 |
+| `c3_bidir_attn` | `0.037035` | 明显退化，暂不进入下一步闭环主线 |
+
+训练审计也给出了同样方向：`c3` 的 `best_val_loss=0.1469`，明显高于 `c1/c2/c3a`。因此，当前最合理的闭环入口不是直接上 `c3`，而是先用 `Teacher / c1 / c3a` 做一个范围收敛、留痕完整的 `S2` 小闭环 pilot，验证离线排序与在线行为是否一致。
 
 ## 当前实验最主要的问题
 
@@ -347,16 +364,16 @@
 
 当前重建结果为：
 
-- `15D`: `train=17558`, `val=5017`, `test=2508`
-- `9D`: `train=17558`, `val=5017`, `test=2508`
+- `15D`: `train=16471`, `val=4381`, `test=1960`
+- `9D`: `train=16471`, `val=4381`, `test=1960`
 - 归一化统计：`norm_stats_15d.mat`, `norm_stats_9d.mat`
 - 构建留痕：`dataset_build_manifest.json`
 
 必须明确的一点是：
 
-- 当前 `data/trained_models/` 中已有 checkpoint 仍是**旧数据阶段**的训练产物
-- 这次完成的是“新 canonical 数据与训练集重建”，还**没有**在当前 shell 环境里基于它们重训模型
-- 原因不是我们不打算重训，而是当前 shell 里没有可直接调用的 `matlab`/`octave` 运行时
+- 当前 `data/trained_models/` 中已有 checkpoint 已经不再对应最新的 boundary-safe canonical 数据集
+- 这次完成的是“更严格协议下的新 canonical 数据与训练集重建”，需要基于它们重新训练模型
+- 任何基于旧 `processed/` 数据集得到的离线结果或模型排序，都不应再直接作为论文正式证据
 
 ### 论文统计口径规则
 
@@ -370,67 +387,106 @@
 
 ### 当前最优先的下一步
 
-现在最该做的不是继续扩写理论说明，而是把“新 canonical 数据集”真正转化为可用于论文对比的模型与评测结果：
+截至 `2026-07-10`，canonical `v2` 数据上的一轮正式 MATLAB 重训、离线评测与训练审计已经完成。当前最优先的下一步不再是重复训练，而是把工作收敛到一个可审计的闭环入口：
 
-1. 先准备可执行训练环境。
-   - 当前 shell 没有 `matlab`/`octave`
-   - 系统里有 `python3`，但还缺 `torch`、`h5py`、`sklearn`、`tqdm`
-   - 严格按论文实验要求时，训练主流程仍以 `matlab/train/*.m` 为准
-   - 仓库现已新增 [scripts/train_models_matlab.sh](/home/jiuyao/drone-formation-e2e/scripts/train_models_matlab.sh:1)，用于在 MATLAB 环境中非交互式调用 `train_all_models`
-   - [environment.yml](/home/jiuyao/drone-formation-e2e/environment.yml:1)、[scripts/bootstrap_python_training_env.sh](/home/jiuyao/drone-formation-e2e/scripts/bootstrap_python_training_env.sh:1) 与 [scripts/train_models.py](/home/jiuyao/drone-formation-e2e/scripts/train_models.py:1) 仅保留为无 MATLAB 时的工程备用路径，不作为论文正式训练口径
-2. 在同一套 canonical `v2` 数据上重训 `c1/c2/c3a/c3` 四个模型，旧 checkpoint 不能继续拿来当正式结果。
-3. 只有在新模型完成重训后，才进入论文主评测的多次独立运行统计；否则现在做出来的模型对比仍然会混入旧数据阶段偏差。
+1. 先打通最小在线部署链路。
+   - 目标只包含 `Teacher / c1 / c3a`
+   - 不把 `c2` 和当前明显退化的 `c3` 混入第一轮闭环
+2. 先做 `S2` 小闭环 pilot，而不是直接扩展到全场景与 8 方法。
+3. 只有在这个 pilot 证明在线链路可信、且闭环排序与离线结果大体一致后，才进入多次独立运行统计。
 
-### 阶段 2：补齐主方法训练
+### 数据集构建修正
 
-1. 准备训练运行时。
-   - 优先方案：在有 MATLAB 的环境中直接执行 `matlab/train/train_all_models.m`
-   - 备选方案：按 `environment.yml` 补齐 Python 依赖后，建立 Python 侧等价训练链路
-2. 在当前 canonical `v2` 数据集上重训并单独保存：
-   - `c1_lstm9d.mat`
-   - `c2_lstm15d.mat`
-   - `c3a_bilstm.mat`
-   - `c3_bidir_attn.mat`
-3. 保存训练日志、验证曲线、数据集构建 manifest 与模型配置快照，确保后续论文结果可追溯。
+从 `2026-07-10` 开始，`processed/` 数据集的正式构建协议应满足以下约束：
 
-### Windows MATLAB 推进步骤
+1. 以 `scene × drone × 连续时间段` 为单位切窗，窗口不得跨场景、跨无人机或跨时间缺口。
+2. 先进行 train/val/test 切分，再只用 train split 计算归一化统计。
+3. train/val/test 之间保留 `W-1` 的 guard rows，避免 `stride=1` 造成近邻窗口泄漏。
 
-如果你当前采用的是 **Windows 端 MATLAB + ROS Toolbox + WSL 仓库目录**，建议按下面顺序推进：
+因此，任何旧的“全局拼接后统一滑窗、再随机切分”的数据集产物，都不应再作为论文正式训练与评测依据。
 
-1. 先不要重新录 bag，当前第一优先级是用 canonical `v2` 数据集完成一次**正式 MATLAB 重训**。
-2. 在 Windows MATLAB 中切到仓库根目录，例如：
-   - `cd('\\wsl.localhost\Ubuntu-20.04\home\jiuyao\drone-formation-e2e')`
-3. 直接运行新的正式入口：
-   - `run matlab/run_paper_training.m`
-4. 这一步会自动：
-   - 调用 `train_all_models`
-   - 训练 `c1/c2/c3a/c3`
-   - 把训练日志写入 `results/training/`
-   - 检查每个 `.mat` 模型文件里是否同时包含 `net/info/metadata`
-5. 如果 `c3_bidir_attn.mat` 仍然失败，不要跳过它继续写论文结果，先保留日志并回到仓库里排查失败原因。
-6. 只有在四个模型都基于当前 canonical 数据完成重训后，才进入下一阶段：
-   - 用新 checkpoint 做统一离线评测
-   - 再做论文要求的多次独立运行统计
+如果离线评测显示 `c3_bidir_attn` 没有优于更简单的基线，不要立即进入闭环主实验。应先运行：
 
-当前仓库的推荐离线评测入口是：
+- `run matlab/run_training_audit.m`
 
-- `run matlab/run_offline_evaluation.m`
-
-这一步会在同一 canonical test set 上统一评测 `c1/c2/c3a/c3` 四个模型，并把结果保存到 `data/eval_results/offline/`，用于先确认新训练模型本身是正常的，再进入更昂贵的闭环实验。
+这一步会审查四个 checkpoint 的 `info/metadata`，汇总验证损失、最佳验证位置和训练留痕，帮助判断问题是在训练收敛、早停、实现细节还是模型复杂度本身。
 
 ### 阶段 3：打通在线部署
 
 1. 先修正 `configs/*.yaml` 和论文/数据管线的参数不一致。
-2. 在 `online_lstm_controller.py` 中实现：
-   - 正确读取 normalization 参数
-   - 滑动窗口维护
-   - 加载训练好的模型
-   - 真实推理输出
-3. 再实现 Teacher-Student：
+2. 当前已落地一条**最小 MATLAB 在线链路**：
+   - [run_online_model_controller.m](/home/jiuyao/drone-formation-e2e/matlab/deployment/run_online_model_controller.m:1)
+   - [run_online_c1_controller.m](/home/jiuyao/drone-formation-e2e/matlab/run_online_c1_controller.m:1)
+   - [run_online_c3a_controller.m](/home/jiuyao/drone-formation-e2e/matlab/run_online_c3a_controller.m:1)
+   - 它只支持 `c1/c3a`，并通过 MATLAB 直接加载 `.mat` 网络做 ROS 在线推理
+   - 当前默认安全策略是：`sim_time < 12s` 时保持 Teacher 执行，`sim_time >= 12s` 后 Student 才接管；同时 Student 输出按 Teacher 的物理限幅裁剪
+3. Student pilot 的仿真侧入口是：
+   - [scene02_circle_4drones_student.launch](/home/jiuyao/drone-formation-e2e/ros_ws/src/drone_sim/launch/scene02_circle_4drones_student.launch:1)
+   - 该入口会让 Teacher 保持 `/cmd_vel_teacher` 在线，但关闭真实执行输出，避免与 Student 抢控制权
+4. 当前这台机器上更稳的 **Windows MATLAB + WSL ROS** 连接方式是：
+   - 不要依赖 Windows 主机名自动注册，因为这台机器的主机名 `灵犀` 在 ROS URI 中会变成 punycode `xn--5nxo7b`，WSL 侧若不能解析该名字，就会出现“MATLAB 日志正常、Gazebo 完全收不到 `/droneN/command/twist`”的假连通
+   - 这台机器是 **WSL2 镜像网络模式**，`hostname -I` 与 Windows 当前联网 IPv4 一致；当前已确认的有效 IPv4 是 `10.16.33.80`
+   - 关键原则是：**WSL 侧启动 ROS master/仿真时，和 Windows MATLAB 侧注册 NodeHost 时，都必须使用同一个数值 IPv4；不能一边用 `localhost`，另一边用数值 IP**
+   - 在 WSL 中启动场景前，优先使用：
+     - `source scripts/use_ros_mirrored_ip.sh`
+     - 或直接运行 [launch_scene02_student_ip.sh](/home/jiuyao/drone-formation-e2e/scripts/launch_scene02_student_ip.sh:1)
+   - 在 Windows MATLAB 中优先使用：
+     - [run_connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/run_connect_ros_wsl_windows.m:1)
+     - 或手动执行 [connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/deployment/connect_ros_wsl_windows.m:1)
+   - 当前 `run_online_c1_controller.m` / `run_online_c3a_controller.m` 也会在发现 ROS 未连接时自动尝试用这套 IPv4 配置重连
+   - 在 WSL 中如需确认/诊断 Windows 主机名映射，可运行：
+     - [diagnose_matlab_ros_hostname.sh](/home/jiuyao/drone-formation-e2e/scripts/diagnose_matlab_ros_hostname.sh:1)
+   - 不要把 MATLAB `NodeHost` 设成 `localhost` 或主机名；在当前环境里应显式使用数值 IPv4
+5. 再实现 Teacher-Student：
    - 软切换
    - 硬切换
    - 漂移检测
    - 长航时滑窗重置
+
+### 当前收敛出的 `S2` 小闭环 pilot
+
+这个 pilot 的目标不是直接产出论文表 5.8，而是回答两个更基础的问题：
+
+1. 当前 canonical 数据上离线更优的 `c3a`，在闭环里是否也至少优于或不差于 `c1`。
+2. 现有在线部署链路是否已经足够可信，可以进入后续多次独立运行统计。
+
+pilot 的固定前提如下：
+
+1. 场景固定为 [scene02_circle_4drones.launch](/home/jiuyao/drone-formation-e2e/ros_ws/src/drone_sim/launch/scene02_circle_4drones.launch:1)。
+2. 参数固定为当前**稳定化复现实验配置**：`omega=0.2`、`kp_h=1.5`、`rate=10 Hz`、`W=20`。
+3. 对象只包含 `Teacher`、`c1_lstm9d`、`c3a_bilstm`，不包含 `c2` 与 `c3`。
+4. 所有 run 都必须独立留痕，且与训练集构建 bag 分开保存。
+
+建议执行顺序如下：
+
+1. **在线推理预检**
+   - 先不争论精度，先验证 `c1/c3a` 的在线输入构造、归一化、窗口维护、模型加载、4 机独立推理和 ROS topic 接线全部正确。
+   - 当前推荐做法是启动 `scene02_circle_4drones_student.launch`，然后在 Windows MATLAB 中运行：
+     - `run matlab/run_online_c1_controller.m`
+     - 或 `run matlab/run_online_c3a_controller.m`
+   - 这一步若失败，说明问题在部署链路，不在论文方法本身，必须先停下修链路。
+2. **Teacher 基线 run**
+   - 用当前 `S2` 稳定化配置跑一条 `Teacher` 正式 bag，确认场景、录制与审计流程本身仍然稳定。
+3. **`c1` 单模型闭环 run**
+   - 只启用 `c1`，固定其他条件不变，做一条完整 `90 s` 的 `S2` run。
+4. **`c3a` 单模型闭环 run**
+   - 只启用 `c3a`，固定其他条件不变，做一条完整 `90 s` 的 `S2` run。
+5. **通过后再做重复**
+   - 对首次通过的学习方法再独立重录 `2` 次，确认 `PASS` 不是偶然。
+
+pilot 的验收口径分两层：
+
+1. **工程准入**
+   - 在线节点全程无异常退出。
+   - 4 架子机都能持续收到有限值控制指令，不出现 `NaN/Inf`。
+   - 控制循环与窗口预热行为和 `10 Hz / W=20` 一致。
+2. **场景通过**
+   - `scripts/audit_bag_quality.py` 对 `scene02_circle` 给出 `PASS`。
+   - 4 架子机都满足 `min_duration >= 85 s`、`clean_ratio >= 95%`、`max |pos| <= 20 m`。
+   - 不出现 flip-over、持续漂移、坠落或大面积样本失效。
+3. **研究判断**
+   - `c3a` 若闭环方向上不优于 `c1`，或两者都明显劣化于 `Teacher`，则不能继续扩展到 `S2'/S4/S5`，应先回到在线部署实现与特征/归一化一致性排查。
+   - 只有当 `Teacher / c1 / c3a` 的闭环表现和当前离线排序大体一致时，才进入多次独立运行与后续场景扩展。
 
 ### 阶段 4：重新定义“论文实验完成”的标准
 

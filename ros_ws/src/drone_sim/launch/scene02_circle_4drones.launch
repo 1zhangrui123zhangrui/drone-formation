@@ -4,6 +4,7 @@
   <arg name="radius" default="3.0"/>
   <arg name="omega" default="0.2"/>
   <arg name="z_target" default="1.8"/>
+  <arg name="teacher_publish_world_cmd" default="true"/>
 
   <!-- 1. 启动 Gazebo + 4 机 spawn -->
   <include file="$(find drone_sim)/launch/spawn_4drones.launch">
@@ -30,6 +31,7 @@
   <node name="teacher_controller" pkg="drone_sim" type="teacher_controller.py" output="screen">
     <param name="rate" value="10"/>
     <param name="num_drones" value="4"/>
+    <param name="publish_world_cmd" value="$(arg teacher_publish_world_cmd)"/>
   </node>
 
   <!-- 5. 延时使能电机 (兜底) -->

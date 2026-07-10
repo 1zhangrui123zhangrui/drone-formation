@@ -5,11 +5,14 @@
 %   run matlab/run_offline_evaluation.m
 
 clear; clc;
+clear attention_layer_feature attention_layer_temporal;
+rehash;
 
 scriptDir = fileparts(mfilename('fullpath'));
 projectRoot = fileparts(scriptDir);
 
 ensure_path(fullfile(scriptDir, 'evaluation'));
+ensure_path(fullfile(scriptDir, 'train'));
 
 DATA_DIR = fullfile(projectRoot, 'data', 'processed');
 MODEL_DIR = fullfile(projectRoot, 'data', 'trained_models');

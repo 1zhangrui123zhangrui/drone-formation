@@ -11,7 +11,7 @@ This folder stores non-source experiment artifacts.
 
 ## Current State
 
-As of `2026-07-09`, this directory already contains:
+As of `2026-07-10`, this directory already contains:
 
 - the older `seed42` bags kept for diagnosis/history
 - a full six-scene audited `v2` bag set in `raw_bags/v2/`:
@@ -28,12 +28,13 @@ As of `2026-07-09`, this directory already contains:
   - `c1_lstm9d.mat`
   - `c2_lstm15d.mat`
   - `c3a_bilstm.mat`
+  - `c3_bidir_attn.mat`
 
-The proposed final model `c3_bidir_attn.mat` is still missing.
+The latest canonical-dataset retraining, offline evaluation, and training audit have already been rerun. At the moment, `c3a_bilstm.mat` is the best offline model on the canonical test split, while `c3_bidir_attn.mat` exists but is clearly underperforming and should not be treated as the paper-ready main result yet.
 
 ## Important Caveat
 
-The current `processed/raw/` and `processed/` datasets were rebuilt from the audited `v2` bag set and should now be treated as the canonical dataset inputs. However, the existing model checkpoints in `trained_models/` are still older training artifacts and were not retrained against this new canonical dataset set.
+The current `processed/raw/` and `processed/` datasets were rebuilt from the audited `v2` bag set and should now be treated as the canonical dataset inputs. As of `2026-07-10`, the processed datasets also use a stricter boundary-safe build policy: windows do not cross scene/drone/time-gap boundaries, train/val/test splits keep guard rows, and normalization stats are fit from train rows only. The current MATLAB checkpoints were retrained against this stricter canonical dataset, but they are still only single-training artifacts, not paper-facing repeated-run evidence.
 
 ## Reporting Rule
 

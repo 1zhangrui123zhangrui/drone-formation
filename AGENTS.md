@@ -35,6 +35,10 @@ This file is for agent-facing working rules. It is intentionally shorter and mor
   - `scripts/record_bags_v2.sh`
 - The next high-priority stage is retraining models on the canonical `v2` dataset with the MATLAB training pipeline, then running repeated evaluation.
 - If the task is paper-faithful model training, prefer `matlab/train/*.m` and `scripts/train_models_matlab.sh`. Treat Python training scripts as engineering fallback only.
+- Verified Windows MATLAB <-> WSL ROS connection method for this machine:
+  - Launch ROS in WSL with `ROS_MASTER_URI=http://localhost:11311`, `ROS_IP=127.0.0.1`, `ROS_HOSTNAME=localhost`
+  - Connect from Windows MATLAB with `rosinit('http://localhost:11311','NodeHost','localhost')`
+  - Do not switch MATLAB to `172.20.10.4` or `172.30.32.1` unless the networking mode is deliberately reconfigured and revalidated
 
 ## Documentation Sync
 
