@@ -77,6 +77,10 @@ fprintf('[online] student_enable_min_sim_time=%.1fs  cmd_limits=[xy=%.2f z=%.2f 
     opts.student_enable_min_sim_time, opts.max_cmd_xy, opts.max_cmd_z, opts.max_cmd_yaw);
 
 while true
+    batchDroneIds = zeros(0, 1);
+    batchInputs = {};
+    batchTeacherCmds = {};
+
     for droneId = 1:opts.num_drones
         [raw15, teacher_cmd, pdes_stamp, ready] = collect_inputs(subs, droneId);
         if ~ready
@@ -90,14 +94,31 @@ while true
 
         buffers{droneId} = append_feature(buffers{droneId}, raw15, spec.window_length);
 
-        [cmd, mode] = infer_or_fallback( ...
-            buffers{droneId}, teacher_cmd, pdes_stamp, spec, stats, net, opts);
-        if isempty(cmd)
+        [cmd, mode, inputCell, needsPredict] = stage_or_fallback( ...
+            buffers{droneId}, teacher_cmd, pdes_stamp, spec, stats, opts);
+        if needsPredict
+            batchDroneIds(end+1, 1) = droneId; %#ok<AGROW>
+            batchInputs{end+1, 1} = inputCell; %#ok<AGROW>
+            batchTeacherCmds{end+1, 1} = teacher_cmd; %#ok<AGROW>
             continue;
         end
 
-        publish_world_cmd(pubs{droneId}, cmd);
-        last_mode(droneId) = mode;
+        if ~isempty(cmd)
+            publish_world_cmd(pubs{droneId}, cmd);
+            last_mode(droneId) = mode;
+        end
+    end
+
+    if ~isempty(batchDroneIds)
+        [cmds, modes] = infer_batch_or_fallback(batchInputs, batchTeacherCmds, net, opts);
+        for k = 1:numel(batchDroneIds)
+            droneId = batchDroneIds(k);
+            if isempty(cmds{k})
+                continue;
+            end
+            publish_world_cmd(pubs{droneId}, cmds{k});
+            last_mode(droneId) = modes(k);
+        end
     end
 
     if toc(last_log) >= opts.log_period_sec
@@ -277,9 +298,11 @@ if size(buf, 1) > windowLength
 end
 end
 
-function [cmd, mode] = infer_or_fallback(buf, teacherCmd, simTime, spec, stats, net, opts)
+function [cmd, mode, inputCell, needsPredict] = stage_or_fallback(buf, teacherCmd, simTime, spec, stats, opts)
 cmd = [];
 mode = "idle";
+inputCell = [];
+needsPredict = false;
 
 if size(buf, 1) < spec.window_length
     if opts.warmup_use_teacher && ~isempty(teacherCmd)
@@ -307,43 +330,85 @@ if ~all(isfinite(windowNorm), 'all')
     return;
 end
 
-inputCell = {single(windowNorm')};
-try
-    pred = predict(net, inputCell);
-    cmd = reshape_prediction(pred);
-catch ME
-    if opts.fallback_on_invalid && ~isempty(teacherCmd)
-        warning('[online] inference failed, falling back to Teacher: %s', ME.message);
-        cmd = teacherCmd;
-        mode = "teacher_predict_error";
-        return;
-    end
-    rethrow(ME);
-end
-
-if ~all(isfinite(cmd)) || numel(cmd) ~= 4
-    if opts.fallback_on_invalid && ~isempty(teacherCmd)
-        cmd = teacherCmd;
-        mode = "teacher_invalid_pred";
-    else
-        cmd = [];
-        mode = "invalid_pred";
-    end
-    return;
-end
-
-cmd = double(cmd(:))';
-cmd_before_clip = cmd;
-cmd = clip_command(cmd, opts);
-if any(abs(cmd - cmd_before_clip) > 1e-9)
-    mode = "student_clipped";
-else
-    mode = "student";
-end
+inputCell = single(windowNorm');
+needsPredict = true;
 end
 
 function windowNorm = normalize_window(window, stats)
 windowNorm = (double(window) - stats.mean) ./ stats.std;
+end
+
+function [cmds, modes] = infer_batch_or_fallback(inputCells, teacherCmds, net, opts)
+numItems = numel(inputCells);
+cmds = cell(numItems, 1);
+modes = repmat("idle", numItems, 1);
+
+try
+    pred = predict(net, inputCells, 'MiniBatchSize', numItems);
+    pred = normalize_batch_prediction_shape(pred, numItems);
+catch ME
+    for i = 1:numItems
+        if opts.fallback_on_invalid && ~isempty(teacherCmds{i})
+            cmds{i} = teacherCmds{i};
+            modes(i) = "teacher_predict_error";
+        end
+    end
+    warning('[online] batched inference failed, falling back to Teacher: %s', ME.message);
+    return;
+end
+
+for i = 1:numItems
+    cmd = pred(i, :);
+    if ~all(isfinite(cmd)) || numel(cmd) ~= 4
+        if opts.fallback_on_invalid && ~isempty(teacherCmds{i})
+            cmds{i} = teacherCmds{i};
+            modes(i) = "teacher_invalid_pred";
+        else
+            cmds{i} = [];
+            modes(i) = "invalid_pred";
+        end
+        continue;
+    end
+
+    cmd = double(cmd(:))';
+    cmdBeforeClip = cmd;
+    cmd = clip_command(cmd, opts);
+    cmds{i} = cmd;
+    if any(abs(cmd - cmdBeforeClip) > 1e-9)
+        modes(i) = "student_clipped";
+    else
+        modes(i) = "student";
+    end
+end
+end
+
+function Y_pred = normalize_batch_prediction_shape(Y_pred, expectedN)
+if iscell(Y_pred)
+    if numel(Y_pred) ~= expectedN
+        error('[online] expected %d prediction cells, got %d.', expectedN, numel(Y_pred));
+    end
+    tmp = zeros(expectedN, 4);
+    for i = 1:expectedN
+        tmp(i, :) = reshape_prediction(Y_pred{i});
+    end
+    Y_pred = tmp;
+    return;
+end
+
+sz = size(Y_pred);
+if ismatrix(Y_pred) && sz(1) == expectedN && sz(2) == 4
+    return;
+end
+if ismatrix(Y_pred) && sz(1) == 4 && sz(2) == expectedN
+    Y_pred = Y_pred';
+    return;
+end
+if expectedN == 1
+    Y_pred = reshape_prediction(Y_pred);
+    return;
+end
+
+error('[online] unexpected batched prediction shape: [%s]', num2str(sz));
 end
 
 function cmd = reshape_prediction(pred)

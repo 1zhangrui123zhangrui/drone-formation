@@ -2,7 +2,7 @@
 
 子母无人机编队端到端控制复现实验仓库。当前论文正文分别位于 [docs/initial_part1.docx](docs/initial_part1.docx) 和 [docs/experiment.docx](docs/experiment.docx)，代码实现覆盖 ROS/Gazebo 仿真、Teacher 数据生成、MATLAB 数据处理与训练脚本，以及部分结果可视化。
 
-本 README 已整合并取代此前根目录中分散的实验说明、阶段记录和临时上下文文件。以下状态以 **2026-07-09** 的仓库实际文件为准，而不是早期计划稿。
+本 README 已整合并取代此前根目录中分散的实验说明、阶段记录和临时上下文文件。以下状态以 **2026-07-11** 的仓库实际文件为准，而不是早期计划稿。
 
 ## 论文方法概要
 
@@ -32,7 +32,7 @@
 | 15D-BiLSTM-DA 训练 | 已产出模型 | `data/trained_models/c3_bidir_attn.mat` |
 | canonical test set 离线评测 | 已完成 | `data/eval_results/offline/offline_summary.csv` |
 | 训练留痕审计 | 已完成 | `data/eval_results/training_audit/training_audit.csv` |
-| MATLAB 最小在线推理链路 | 已实现 `c1/c3a` 专用入口 | `matlab/deployment/run_online_model_controller.m` |
+| MATLAB 最小在线推理链路 | 已实现 `c1/c3a` 专用入口，且 `localhost` 连接流程已打通 | `matlab/deployment/run_online_model_controller.m` |
 | bag 轨迹/误差可视化 | 已完成 | `results/figures/*.png`, `*.pdf` |
 
 ### 尚未完成
@@ -40,7 +40,7 @@
 | 模块 | 当前问题 |
 | --- | --- |
 | `BiLSTM-DA` 最终模型 | checkpoint 已存在，但当前离线效果明显落后于 `c1/c3a`，不能直接当作论文主方法结果 |
-| 在线部署控制器 | Python 占位节点仍未打通；当前最小可用链路改为 MATLAB + ROS Toolbox，仅覆盖 `c1/c3a` |
+| 在线部署控制器 | Python 占位节点仍未打通；当前最小可用链路改为 MATLAB + ROS Toolbox，仅覆盖 `c1/c3a`。ROS 连接已打通，但闭环稳定性仍在排查 |
 | 论文主实验闭环评估 | 尚未形成 8 方法 x 多场景的真实结果矩阵 |
 | 统计显著性 | 没有 5 次独立运行均值/方差与 `p-value` |
 | 论文图表 | 当前大多是 bag 诊断图，不是论文最终对比图 |
@@ -423,21 +423,52 @@
 3. Student pilot 的仿真侧入口是：
    - [scene02_circle_4drones_student.launch](/home/jiuyao/drone-formation-e2e/ros_ws/src/drone_sim/launch/scene02_circle_4drones_student.launch:1)
    - 该入口会让 Teacher 保持 `/cmd_vel_teacher` 在线，但关闭真实执行输出，避免与 Student 抢控制权
-4. 当前这台机器上更稳的 **Windows MATLAB + WSL ROS** 连接方式是：
-   - 不要依赖 Windows 主机名自动注册，因为这台机器的主机名 `灵犀` 在 ROS URI 中会变成 punycode `xn--5nxo7b`，WSL 侧若不能解析该名字，就会出现“MATLAB 日志正常、Gazebo 完全收不到 `/droneN/command/twist`”的假连通
-   - 这台机器是 **WSL2 镜像网络模式**，`hostname -I` 与 Windows 当前联网 IPv4 一致；当前已确认的有效 IPv4 是 `10.16.33.80`
-   - 关键原则是：**WSL 侧启动 ROS master/仿真时，和 Windows MATLAB 侧注册 NodeHost 时，都必须使用同一个数值 IPv4；不能一边用 `localhost`，另一边用数值 IP**
-   - 在 WSL 中启动场景前，优先使用：
-     - `source scripts/use_ros_mirrored_ip.sh`
-     - 或直接运行 [launch_scene02_student_ip.sh](/home/jiuyao/drone-formation-e2e/scripts/launch_scene02_student_ip.sh:1)
-   - 在 Windows MATLAB 中优先使用：
-     - [run_connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/run_connect_ros_wsl_windows.m:1)
-     - 或手动执行 [connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/deployment/connect_ros_wsl_windows.m:1)
-   - 当前 `run_online_c1_controller.m` / `run_online_c3a_controller.m` 也会在发现 ROS 未连接时自动尝试用这套 IPv4 配置重连
-   - 在 WSL 中如需确认/诊断 Windows 主机名映射，可运行：
-     - [diagnose_matlab_ros_hostname.sh](/home/jiuyao/drone-formation-e2e/scripts/diagnose_matlab_ros_hostname.sh:1)
-   - 不要把 MATLAB `NodeHost` 设成 `localhost` 或主机名；在当前环境里应显式使用数值 IPv4
-5. 再实现 Teacher-Student：
+4. 当前这台机器上**唯一经过本仓库实际打通验证**的 **Windows MATLAB + WSL ROS** 连接方式是：
+   - **WSL ROS master 保持本地：**
+     - `ROS_MASTER_URI=http://localhost:11311`
+     - `ROS_IP=127.0.0.1`
+     - `ROS_HOSTNAME=localhost`
+   - **Windows MATLAB 也使用本地地址连接：**
+     - `rosinit('http://localhost:11311','NodeHost','localhost')`
+     - 或直接运行 [run_connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/run_connect_ros_wsl_windows.m:1)
+   - 当前 helper [connect_ros_wsl_windows.m](/home/jiuyao/drone-formation-e2e/matlab/deployment/connect_ros_wsl_windows.m:1) 与 [run_online_c1_controller.m](/home/jiuyao/drone-formation-e2e/matlab/run_online_c1_controller.m:1) / [run_online_c3a_controller.m](/home/jiuyao/drone-formation-e2e/matlab/run_online_c3a_controller.m:1) 已按这套 `localhost` 基线收敛
+   - **不要再把当前机器的常规连接流程写成 `NodeHost=10.16.33.80`。**
+     - 这条数值 IPv4 路线在本项目历史联调中曾出现“`rostopic info` 注册看似正常，但 publisher 端口无法真正监听或 WSL 侧回连失败”的问题
+     - 也不要依赖 Windows 主机名自动注册，因为这台机器的主机名 `灵犀` 在 ROS URI 中会变成 punycode `xn--5nxo7b`，WSL 侧若不能解析该名字，就会出现“MATLAB 日志正常、Gazebo 收不到 `/droneN/command/twist`”的假连通
+   - 只有在**主动更改了网络拓扑**并且重新做过端到端验证时，才允许偏离 `localhost` 基线
+5. 当前推荐的**标准连接流程**如下：
+   - **步骤 1：在 WSL 启动场景**
+     - `cd /home/jiuyao/drone-formation-e2e`
+     - `source ros_ws/devel/setup.bash`
+     - `export ROS_MASTER_URI=http://localhost:11311`
+     - `export ROS_IP=127.0.0.1`
+     - `export ROS_HOSTNAME=localhost`
+     - `roslaunch drone_sim scene02_circle_4drones_student.launch gui:=true`
+   - **步骤 2：在 Windows MATLAB 启动连接**
+     - `cd('\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e')`
+     - `run matlab/run_connect_ros_wsl_windows.m`
+   - **步骤 3：在 Windows MATLAB 启动在线控制**
+     - `run matlab/run_online_c1_controller.m`
+     - 或 `run matlab/run_online_c3a_controller.m`
+   - **步骤 4：在 WSL 做最小验证**
+     - `rostopic info /drone1/command/twist`
+     - `rostopic echo -n 5 /drone1/command/twist`
+     - `rostopic hz /drone1/command/twist`
+   - **当前正确现象应当是：**
+     - publisher URI 显示为 `http://localhost:<port>/`
+     - `rostopic echo` 能收到 `TwistStamped`
+     - `rostopic hz` 不应退化到接近 `1 Hz`
+6. 当前推荐的**最小判因顺序**如下，不要再跳步：
+   - **先看连接是否真的打通**
+     - 如果 `rostopic echo /drone1/command/twist` 完全收不到消息，先检查 MATLAB 是否按 `localhost` 基线连接，而不是先改模型或先怀疑场景
+   - **再看 publisher URI 是否异常**
+     - 如果 URI 里出现 `xn--5nxo7b` 或其他 Windows 主机名，说明又回到了主机名自动注册路径
+     - 如果 URI 里出现数值 IPv4，也不要直接当成正确，应优先回到 `localhost` 基线复核
+   - **连接通了再看频率**
+     - 如果 `echo` 有消息，但 `rostopic hz /drone1/command/twist` 明显低于 `10 Hz`，优先怀疑 MATLAB 在线推理链路吞吐，而不是先下结论说模型本身错误
+   - **最后才看闭环稳定性**
+     - 只有当 topic 接线、消息内容和发布频率都正常后，GUI 里的“乱飞”才有资格被归因到控制/模型/动力学不稳定
+7. 再实现 Teacher-Student：
    - 软切换
    - 硬切换
    - 漂移检测
@@ -465,6 +496,11 @@ pilot 的固定前提如下：
      - `run matlab/run_online_c1_controller.m`
      - 或 `run matlab/run_online_c3a_controller.m`
    - 这一步若失败，说明问题在部署链路，不在论文方法本身，必须先停下修链路。
+   - 预检时必须同时看三项：
+     - `rostopic echo -n 5 /drone1/command/twist`
+     - `rostopic hz /drone1/cmd_vel_teacher`
+     - `rostopic hz /drone1/command/twist`
+   - 如果 `cmd_vel_teacher` 接近 `10 Hz`，但 `command/twist` 明显掉到低频，说明当前问题在 Student 在线推理/发布链路，不在场景 driver 或 Teacher 标签链路。
 2. **Teacher 基线 run**
    - 用当前 `S2` 稳定化配置跑一条 `Teacher` 正式 bag，确认场景、录制与审计流程本身仍然稳定。
 3. **`c1` 单模型闭环 run**
