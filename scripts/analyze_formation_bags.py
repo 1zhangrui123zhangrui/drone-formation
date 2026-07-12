@@ -67,11 +67,11 @@ class SceneSpec:
 
 
 SCENES_5 = [
-    SceneSpec("s1_hover", "S1 Hover", "scene01_hover_4drones_v2.bag"),
-    SceneSpec("s2_circle", "S2 Circle", "scene02_circle_4drones_v2_worldfix_entryfix.bag"),
-    SceneSpec("s3_reconfig", "S3 Reconfiguration", "scene03_reconfig_4drones_v2.bag", True),
-    SceneSpec("s4_wind", "S4 Wind Disturbance", "scene04_wind_4drones_v2.bag", True),
-    SceneSpec("s5_longtime", "S5 Long-Duration", "scene05_longtime_4drones_v2.bag", True),
+    SceneSpec("s1_hover", "S1 Hover", "scene01_hover_seed01.bag"),
+    SceneSpec("s2_circle", "S2 Circle", "scene02_circle_seed01.bag"),
+    SceneSpec("s3_reconfig", "S3 Reconfiguration", "scene03_reconfig_seed01.bag", True),
+    SceneSpec("s4_wind", "S4 Wind Disturbance", "scene04_wind_seed01.bag", True),
+    SceneSpec("s5_longtime", "S5 Long-Duration", "scene05_longtime_seed01.bag", True),
 ]
 
 
@@ -323,7 +323,7 @@ def phase_mean(metrics: dict, t: np.ndarray, lo: float, hi: float) -> tuple[floa
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bag-dir", default="data/raw_bags/v2")
+    parser.add_argument("--bag-dir", default="data/raw_bags/v2/formal_5x5")
     parser.add_argument("--out-dir", default="results/formation_analysis")
     args = parser.parse_args()
 

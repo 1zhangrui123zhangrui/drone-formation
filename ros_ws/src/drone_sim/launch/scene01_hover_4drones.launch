@@ -2,6 +2,7 @@
 <launch>
   <!-- S1: 四机定点悬停 (60s) -->
   <arg name="gui" default="false"/>
+  <arg name="seed" default="1"/>
   <arg name="z_target" default="1.8"/>
 
   <include file="$(find drone_sim)/launch/spawn_4drones.launch">

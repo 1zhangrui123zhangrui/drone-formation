@@ -5,7 +5,8 @@
   <arg name="radius" default="3.0"/>
   <arg name="omega" default="0.2"/>
   <arg name="z_target" default="1.8"/>
-  <arg name="wind_seed" default="42"/>
+  <arg name="seed" default="1"/>
+  <arg name="wind_seed" default="$(arg seed)"/>
 
   <include file="$(find drone_sim)/launch/spawn_4drones.launch">
     <arg name="gui" value="$(arg gui)"/>

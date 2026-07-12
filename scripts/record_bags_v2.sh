@@ -44,6 +44,15 @@ SCENE="${1:-all}"
 SEED_ARG="${2:-seed01}"
 SEEDS=()
 
+case "$SCENE" in
+  all|s1|s2|s3|s4|s5) ;;
+  *)
+    echo "[record_bags_v2] invalid scene: $SCENE"
+    echo "Expected: all | s1 | s2 | s3 | s4 | s5"
+    exit 2
+    ;;
+esac
+
 case "$SEED_ARG" in
   allseeds) SEEDS=(seed01 seed02 seed03 seed04 seed05) ;;
   seed0[1-5]) SEEDS=("$SEED_ARG") ;;
@@ -135,6 +144,8 @@ PY
   # 正式质量审计
   if [[ "$WAIT_STATUS" -ne 0 ]]; then
     echo "[record] simulated-time wait failed for $EFFECTIVE_BAG_NAME (status=$WAIT_STATUS)"
+    echo "[record] FAIL -> rejected incomplete bag: $TMP_BAG_PATH"
+    return 1
   fi
   echo "[record] auditing $EFFECTIVE_BAG_NAME..."
   if python3 "$ROOT_DIR/scripts/audit_bag_quality.py" "$TMP_BAG_PATH"; then

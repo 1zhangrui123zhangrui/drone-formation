@@ -1,7 +1,9 @@
 <?xml version="1.0"?>
 <launch>
   <!-- S5: 长航时巡航 (180s), 飞行参数等同 S2 圆形 -->
+  <arg name="seed" default="1"/>
   <include file="$(find drone_sim)/launch/scene02_circle_4drones.launch">
     <arg name="gui" value="false"/>
+    <arg name="seed" value="$(arg seed)"/>
   </include>
 </launch>

@@ -1,0 +1,10 @@
+{
+  "num_bags": 25,
+  "num_pass": 25,
+  "num_warn": 0,
+  "num_fail": 0,
+  "s2_mean_track_rmse_m": 0.401946668280015,
+  "s4_mean_track_rmse_m": 0.41716368709925,
+  "s4_vs_s2_rmse_ratio": 1.0378583031533777,
+  "s4_note": "S4 bags are stable, but wind effect is weak in teacher closed-loop data if this ratio is close to 1.0."
+}

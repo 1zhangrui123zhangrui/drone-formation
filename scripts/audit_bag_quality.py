@@ -208,6 +208,7 @@ def main():
         print("[audit] failures:")
         for item in result["failures"]:
             print(f"  - {item}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

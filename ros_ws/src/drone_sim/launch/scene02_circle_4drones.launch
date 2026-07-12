@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="gui" default="false"/>
+  <arg name="seed" default="1"/>
   <arg name="radius" default="3.0"/>
   <arg name="omega" default="0.2"/>
   <arg name="z_target" default="1.8"/>

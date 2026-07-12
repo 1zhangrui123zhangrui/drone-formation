@@ -2,7 +2,7 @@
 
 子母无人机编队端到端控制复现实验仓库。当前论文正文分别位于 [docs/initial_part1.docx](docs/initial_part1.docx) 和 [docs/experiment.docx](docs/experiment.docx)，代码实现覆盖 ROS/Gazebo 仿真、Teacher 数据生成、MATLAB 数据处理与训练脚本，以及部分结果可视化。
 
-本 README 已整合并取代此前根目录中分散的实验说明、阶段记录和临时上下文文件。以下状态以 **2026-07-11** 的仓库实际文件为准，而不是早期计划稿。
+本 README 已整合并取代此前根目录中分散的实验说明、阶段记录和临时上下文文件。以下状态以 **2026-07-12** 的仓库实际文件为准，而不是早期计划稿。
 
 ## 论文方法概要
 
@@ -23,7 +23,7 @@
 | 模块 | 实际状态 | 证据 |
 | --- | --- | --- |
 | 论文方法与实验设计文稿 | 已更新到 Word 原稿版本 | `docs/initial_part1.docx`, `docs/experiment.docx` |
-| 4 机仿真场景/Teacher 控制器 | 已实现并可生成 rosbag | `ros_ws/src/drone_sim/scripts/` |
+| 4 机仿真场景/Teacher 控制器 | 已实现；5 场景 x 5 seed 的 formal bag 已录制并全量 audit PASS | `data/raw_bags/v2/formal_5x5/`, `scripts/verify_formal_5x5_bags.py` |
 | rosbag 转 `.mat` | 已完成 | `scripts/bag_to_mat.py` |
 | MATLAB 数据集构建 | 已完成并已有产物 | `data/processed/dataset_*`, `norm_stats_*` |
 | 9D-LSTM 训练 | 已产出模型 | `data/trained_models/c1_lstm9d.mat` |
@@ -47,23 +47,34 @@
 
 ## 数据现状审计
 
-下面的统计现在分成两层理解：
+当前 raw bag 的规范入口是 `data/raw_bags/v2/formal_5x5/`。旧的 pre-formal 单 run / pilot `v2` bag 已从 `data/raw_bags/v2/` 删除，避免后续误用。
 
-- `seed42` 旧 bag 与早期失败 pilot 仍保留，用于诊断历史问题
-- 当前真正应作为主数据入口的，是 `data/raw_bags/v2/` 下通过正式审计的 `v2` bag，以及由它们重建出的 `data/processed/raw/*.mat`
+formal `v2` 原始数据集状态如下：
 
-当前 canonical `v2` 原始数据统计如下：
-
-| 场景 | bag 文件 | 干净样本数 | 现状判断 |
+| 场景 | bag 文件规范 | 数量 | 现状判断 |
 | --- | --- | ---: | --- |
-| S1 Hover | `scene01_hover_4drones_v2.bag` | 2386 | 4 机全部通过审计 |
-| S2 Circle | `scene02_circle_4drones_v2_worldfix_entryfix.bag` | 3591 | 4 机全部通过审计 |
-| S2' Lemni | `scene02p_lemni_4drones_v2.bag` | 3582 | 4 机全部通过审计 |
-| S3 Reconfig | `scene03_reconfig_4drones_v2.bag` | 4774 | 4 机全部通过审计 |
-| S4 Wind | `scene04_wind_4drones_v2.bag` | 3581 | 4 机全部通过审计 |
-| S5 Longtime | `scene05_longtime_4drones_v2.bag` | 7188 | 4 机全部通过审计 |
+| S1 Hover | `scene01_hover_seed01.bag` ... `scene01_hover_seed05.bag` | 5 | 全量 audit PASS |
+| S2 Circle | `scene02_circle_seed01.bag` ... `scene02_circle_seed05.bag` | 5 | 全量 audit PASS |
+| S3 Reconfig | `scene03_reconfig_seed01.bag` ... `scene03_reconfig_seed05.bag` | 5 | 全量 audit PASS |
+| S4 Wind | `scene04_wind_seed01.bag` ... `scene04_wind_seed05.bag` | 5 | 全量 audit PASS |
+| S5 Longtime | `scene05_longtime_seed01.bag` ... `scene05_longtime_seed05.bag` | 5 | 全量 audit PASS |
 
-`data/processed/` 已基于上述 6 个 `v2` bag 重新生成。需要注意的是，`2026-07-10` 起正式采用了更严格的数据集构建协议：按 `scene × drone × 连续时间段` 切窗、split 之间保留 `W-1` guard rows、并且只用 train split 计算归一化统计。当前构建结果是：
+验收命令：
+
+```bash
+python3 scripts/verify_formal_5x5_bags.py --audit
+python3 scripts/semantic_audit_formal_5x5.py
+```
+
+当前结果为 `expected=25`, `present=25`, `PASS`；语义审计结果为 `25/25 PASS`，无 `WARN/FAIL`。语义审计输出保存在 `results/audits/formal_5x5_semantic_summary.csv` 和 `results/audits/formal_5x5_semantic_aggregate.json`。
+
+语义层面的关键事实：
+
+- S3 五个 seed 均确认存在 40s/80s 对应的三阶段队形变化，且实际平均机间距跟随期望平均机间距。
+- S3 最小实际机间距为约 `0.578 m`，高于当前 `0.50 m` 安全阈值。
+- S4 风扰 bag 稳定通过，但在 Teacher 闭环数据中，`S4/S2` tracking RMSE 比值约为 `1.04`，风扰造成的误差增量较弱；论文中不能把这组 Teacher 数据夸大为强风扰失稳证据。
+
+需要注意：`data/processed/` 目前仍是基于较早的 audited `v2` 单 run bag 重建，不是 formal 5x5 repeated-run set。`2026-07-10` 起正式采用了更严格的数据集构建协议：按 `scene × drone × 连续时间段` 切窗、split 之间保留 `W-1` guard rows、并且只用 train split 计算归一化统计。当前构建结果是：
 
 - 原始样本总数：`25102`
 - `15D` 窗口总数：`22812`
@@ -286,16 +297,13 @@
    - `scene_driver.py` 新增平滑入轨逻辑
    - `scene02_circle_4drones.launch`、`scene02p_lemni_4drones.launch`、`scene03_reconfig_4drones.launch`、`scene04_wind_4drones.launch` 已统一接入 `prehover_duration=4.0` 与 `transition_duration=8.0`
 
-5. 诊断历史仍然保留，便于追溯。
-   - 旧正式失败 bag：`data/raw_bags/v2/scene02_circle_4drones_v2.bag`
-   - 旧诊断 pilot bag：`data/raw_bags/v2/scene02_circle_4drones_v2_pilot_2026-07-09_interrupt.bag`
-   - 新正式通过 bag：`data/raw_bags/v2/scene02_circle_4drones_v2_worldfix_entryfix.bag`
+5. 这部分是历史诊断记录，便于追溯当时的修复原因；对应的 pre-formal bag 文件已经从 `data/raw_bags/v2/` 删除，当前不要再把这些旧文件名作为数据入口。
 
 ### 2026-07-09 夜间 S2 正式重录结果
 
 修复完成后，已经实际执行：
 
-- `RECORD_BAG_SUFFIX='_worldfix_entryfix' bash scripts/record_bags_v2.sh s2`
+- 历史命令：`RECORD_BAG_SUFFIX='_worldfix_entryfix' bash scripts/record_bags_v2.sh s2`
 
 本次结果已经满足当前 README 中定义的论文级数据审计门槛：
 
@@ -323,7 +331,7 @@
 在当前事实下，实验部分最合理的下一步已经不是继续修 `S2`，而是把这份通过结果作为稳定基线向后推进：
 
 1. **先固化 `S2` 稳定基线**
-   - 把 `scene02_circle_4drones_v2_worldfix_entryfix.bag` 视为当前第一份合格的 `S2` 正式数据
+   - 历史上曾把 `scene02_circle_4drones_v2_worldfix_entryfix.bag` 作为第一份合格的 `S2` 正式数据；当前已被 `formal_5x5/scene02_circle_seed01-05.bag` 取代
    - 后续所有 README、论文草稿和实验表述都要明确它对应的是“稳定化复现实验配置”
 
 2. **立即做 `S2` 的可重复性验证**
@@ -348,7 +356,7 @@
 
 ### 2026-07-09 夜间六场景 v2 数据集重建结果
 
-在 `S2 / S2' / S3 / S4 / S5` 全部通过审计后，又补录了 `S1`，因此当前已经形成一套完整的六场景 `v2` canonical bag 集：
+以下是 `2026-07-09` 的历史六场景 `v2` 数据集记录。该记录解释了早期 `processed/` 的来源，但这些 pre-formal bag 文件已经不再是当前 raw bag 入口：
 
 - `scene01_hover_4drones_v2.bag`
 - `scene02_circle_4drones_v2_worldfix_entryfix.bag`

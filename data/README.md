@@ -11,16 +11,19 @@ This folder stores non-source experiment artifacts.
 
 ## Current State
 
-As of `2026-07-10`, this directory already contains:
+As of `2026-07-12`, this directory contains:
 
 - the older `seed42` bags kept for diagnosis/history
-- a full six-scene audited `v2` bag set in `raw_bags/v2/`:
-  - `scene01_hover_4drones_v2.bag`
-  - `scene02_circle_4drones_v2_worldfix_entryfix.bag`
-  - `scene02p_lemni_4drones_v2.bag`
-  - `scene03_reconfig_4drones_v2.bag`
-  - `scene04_wind_4drones_v2.bag`
-  - `scene05_longtime_4drones_v2.bag`
+- the formal paper-facing bag directory `raw_bags/v2/formal_5x5/`
+  - expected names are `scene01_hover_seed01.bag` ... `scene05_longtime_seed05.bag`
+  - the completed formal set is 5 scenes x 5 seeds = 25 accepted bags
+  - `scripts/record_bags_v2.sh all allseeds` records this set
+  - `scripts/verify_formal_5x5_bags.py --audit` verifies completeness and per-bag audit status
+  - the latest full verification passed on all 25 bags
+  - `scripts/semantic_audit_formal_5x5.py` verifies formation-level semantics such as S3 phase changes and collision-free formation keeping
+- formal audit outputs in `results/audits/`:
+  - `formal_5x5_semantic_summary.csv`
+  - `formal_5x5_semantic_aggregate.json`
 - rebuilt raw `.mat` files in `processed/raw/`
 - rebuilt `9D` and `15D` train/val/test datasets in `processed/`
 - `dataset_build_manifest.json` describing the current dataset build
@@ -34,7 +37,9 @@ The latest canonical-dataset retraining, offline evaluation, and training audit 
 
 ## Important Caveat
 
-The current `processed/raw/` and `processed/` datasets were rebuilt from the audited `v2` bag set and should now be treated as the canonical dataset inputs. As of `2026-07-10`, the processed datasets also use a stricter boundary-safe build policy: windows do not cross scene/drone/time-gap boundaries, train/val/test splits keep guard rows, and normalization stats are fit from train rows only. The current MATLAB checkpoints were retrained against this stricter canonical dataset, but they are still only single-training artifacts, not paper-facing repeated-run evidence.
+The current `processed/raw/` and `processed/` datasets were rebuilt from the earlier audited `v2` single-run bag set, not yet from the formal `raw_bags/v2/formal_5x5/` repeated-run set. The old pre-formal `v2` bag files have been removed from this directory to avoid accidental reuse. As of `2026-07-10`, the processed datasets also use a stricter boundary-safe build policy: windows do not cross scene/drone/time-gap boundaries, train/val/test splits keep guard rows, and normalization stats are fit from train rows only. The current MATLAB checkpoints were retrained against that stricter earlier dataset, but they are still only single-training artifacts and must not be reported as formal 5-seed paper results.
+
+The formal `S4` wind bags are stable and pass semantic audit, but the teacher closed-loop tracking RMSE is only slightly higher than `S2` (`S4/S2 ≈ 1.04` in the latest semantic audit). Treat this as a weak wind-effect dataset unless later Student closed-loop evaluation or stronger wind settings show a clearer disturbance response.
 
 ## Reporting Rule
 

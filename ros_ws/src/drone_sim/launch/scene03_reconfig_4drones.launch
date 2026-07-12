@@ -2,6 +2,7 @@
 <launch>
   <!-- S3: 四机编队重构 (120s: 矩形 0-40s → 菱形 40-80s → 三角形+中心 80-120s) -->
   <arg name="gui" default="false"/>
+  <arg name="seed" default="1"/>
   <arg name="radius" default="3.0"/>
   <arg name="omega" default="0.2"/>
   <arg name="z_target" default="1.8"/>
