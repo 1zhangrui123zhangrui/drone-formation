@@ -27,6 +27,9 @@ class SceneDriver:
         # S3 队形切换时刻
         self.t_switch_1 = rospy.get_param('~t_switch_1', 40.0)   # 矩形→菱形
         self.t_switch_2 = rospy.get_param('~t_switch_2', 80.0)   # 菱形→三角形+中心
+        self.formation_transition_duration = rospy.get_param('~formation_transition_duration', 8.0)
+        self.reconfig_stage3_scale = rospy.get_param('~reconfig_stage3_scale', 1.8)
+        self.reconfig_via_scale = rospy.get_param('~reconfig_via_scale', 3.6)
         startup_wait = rospy.get_param('~startup_wait', 5.0)
 
         rospy.loginfo(f'[scene_driver] init: scenario={self.scenario}, N={self.num_drones}')
@@ -46,6 +49,37 @@ class SceneDriver:
                       f'omega={self.omega}, z={self.z_target}, formation_size={self.formation_size}, '
                       f'prehover={self.prehover_duration}, transition={self.transition_duration}')
 
+    @staticmethod
+    def _smoothstep(x):
+        x = float(np.clip(x, 0.0, 1.0))
+        return x * x * (3.0 - 2.0 * x)
+
+    def _reconfig_offset_sets(self):
+        s = self.formation_size
+        rectangle = [np.array([ s,  s]), np.array([-s,  s]),
+                     np.array([-s, -s]), np.array([ s, -s])]
+
+        d_diamond = s * 1.414
+        diamond = [np.array([ d_diamond,  0]), np.array([ 0,  d_diamond]),
+                   np.array([-d_diamond,  0]), np.array([ 0, -d_diamond])]
+
+        d_tri = s * self.reconfig_stage3_scale
+        triangle_center = [np.array([ 0,  d_tri]),
+                           np.array([-d_tri, -d_tri * 0.6]),
+                           np.array([ d_tri, -d_tri * 0.6]),
+                           np.array([ 0,  0])]
+
+        d_via = s * self.reconfig_via_scale
+        triangle_via = [np.array([ 0,  d_via]),
+                        np.array([-d_via, -d_via * 0.6]),
+                        np.array([ d_via, -d_via * 0.6]),
+                        np.array([ 0, -d_via])]
+        return rectangle, diamond, triangle_via, triangle_center
+
+    @staticmethod
+    def _blend_offsets(offsets_a, offsets_b, alpha):
+        return [(1.0 - alpha) * a + alpha * b for a, b in zip(offsets_a, offsets_b)]
+
     def get_formation_offsets(self, t):
         """根据场景与时间返回 N 个偏移向量 (论文 §3.2 公式 3.8)"""
         s = self.formation_size
@@ -55,23 +89,27 @@ class SceneDriver:
             return [np.array([ s,  s]), np.array([-s,  s]),
                     np.array([-s, -s]), np.array([ s, -s])][:self.num_drones]
 
-        # S3 reconfig: 矩形 → 菱形 → 三角形+中心
+        # S3 reconfig: 矩形 → 菱形 → 三角形+中心.
+        # Offset changes are smoothed; hard jumps at 40/80 s can excite the
+        # repulsion term and destabilize the center drone during stage 3.
+        rectangle, diamond, triangle_via, triangle_center = self._reconfig_offset_sets()
+        dt = max(float(self.formation_transition_duration), 1e-3)
+        half_dt = 0.5 * dt
+
         if t < self.t_switch_1:
-            # 阶段 1: 矩形 (与默认一致)
-            return [np.array([ s,  s]), np.array([-s,  s]),
-                    np.array([-s, -s]), np.array([ s, -s])]
-        elif t < self.t_switch_2:
-            # 阶段 2: 菱形 (顶点向外,边长保持相同)
-            d = s * 1.414
-            return [np.array([ d,  0]), np.array([ 0,  d]),
-                    np.array([-d,  0]), np.array([ 0, -d])]
-        else:
-            # 阶段 3: 三角形 + 中心机
-            d = s * 1.2
-            return [np.array([ 0,  d]),
-                    np.array([-d, -d * 0.6]),
-                    np.array([ d, -d * 0.6]),
-                    np.array([ 0,  0])]
+            return rectangle[:self.num_drones]
+        if t < self.t_switch_1 + dt:
+            alpha = self._smoothstep((t - self.t_switch_1) / dt)
+            return self._blend_offsets(rectangle, diamond, alpha)[:self.num_drones]
+        if t < self.t_switch_2:
+            return diamond[:self.num_drones]
+        if t < self.t_switch_2 + half_dt:
+            alpha = self._smoothstep((t - self.t_switch_2) / half_dt)
+            return self._blend_offsets(diamond, triangle_via, alpha)[:self.num_drones]
+        if t < self.t_switch_2 + dt:
+            alpha = self._smoothstep((t - self.t_switch_2 - half_dt) / half_dt)
+            return self._blend_offsets(triangle_via, triangle_center, alpha)[:self.num_drones]
+        return triangle_center[:self.num_drones]
 
     def base_center_trajectory(self, t):
         if self.scenario == 'hover':
