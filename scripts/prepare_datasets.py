@@ -12,6 +12,8 @@ This version enforces leakage-safe dataset construction:
 """
 import argparse
 import json
+import hashlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +46,13 @@ def load_raw_mat(mat_path: Path):
     }
 
 
+def parse_source_identity(mat_path: Path):
+    match = re.fullmatch(r"(scene\d{2}_[a-z0-9]+)_(seed\d{2})", mat_path.stem)
+    if not match:
+        raise ValueError(f"{mat_path}: filename must encode formal scene and seed")
+    return match.group(1), match.group(2)
+
+
 def fit_normalize_stats(data: np.ndarray):
     mean = data.mean(axis=0)
     std = data.std(axis=0, ddof=0)
@@ -67,7 +76,7 @@ def sliding_window(sequence: np.ndarray, window_size: int, stride: int):
     return windows
 
 
-def split_contiguous_segments(sample, scene_name: str, gap_threshold: float):
+def split_contiguous_segments(sample, scene_name: str, seed_name: str, source_mat: str, gap_threshold: float):
     drone_ids = np.asarray(sample["drone_id"]).reshape(-1)
     t_vec = np.asarray(sample["t_vec"]).reshape(-1)
     x15 = np.asarray(sample["X"])
@@ -103,8 +112,12 @@ def split_contiguous_segments(sample, scene_name: str, gap_threshold: float):
             segments.append(
                 {
                     "scene": scene_name,
+                    "seed": seed_name,
+                    "source_mat": source_mat,
+                    "source_drone_row_start": int(start),
+                    "source_drone_row_end": int(end),
                     "drone_id": drone_id,
-                    "segment_id": f"{scene_name}_d{drone_id}_seg{seg_idx:02d}",
+                    "segment_id": f"{scene_name}_{seed_name}_d{drone_id}_seg{seg_idx:02d}",
                     "t_vec": t_d[start:end],
                     "X15": x_d[start:end, :],
                     "Y4": y_d[start:end, :],
@@ -207,8 +220,9 @@ def main():
     for mat_path in files:
         print(f"[prepare] loading {mat_path.name}")
         sample = load_raw_mat(mat_path)
+        scene_name, seed_name = parse_source_identity(mat_path)
         sample_counts[mat_path.name] = int(sample["X"].shape[0])
-        segments.extend(split_contiguous_segments(sample, mat_path.stem, args.gap_threshold))
+        segments.extend(split_contiguous_segments(sample, scene_name, seed_name, mat_path.name, args.gap_threshold))
 
     total_raw_samples = sum(seg["X15"].shape[0] for seg in segments)
     print(f"[prepare] total raw samples across contiguous segments: {total_raw_samples}")
@@ -224,6 +238,10 @@ def main():
         report = {
             "segment_id": seg["segment_id"],
             "scene": seg["scene"],
+            "seed": seg["seed"],
+            "source_mat": seg["source_mat"],
+            "source_drone_row_start": seg["source_drone_row_start"],
+            "source_drone_row_end": seg["source_drone_row_end"],
             "drone_id": int(seg["drone_id"]),
             "rows": int(seg["X15"].shape[0]),
             "guard_rows": int(split_info["guard"]),
@@ -249,6 +267,8 @@ def main():
     split_windows_15 = {"train": [], "val": [], "test": []}
     split_windows_9 = {"train": [], "val": [], "test": []}
     split_labels = {"train": [], "val": [], "test": []}
+    split_provenance = {name: {"scene": [], "seed": [], "drone_id": [], "segment_id": [], "label_time": []}
+                        for name in ("train", "val", "test")}
 
     for seg, report in zip(segments, segment_report):
         for split_name in ("train", "val", "test"):
@@ -267,6 +287,14 @@ def main():
             split_windows_15[split_name].append(w15)
             split_windows_9[split_name].append(w9)
             split_labels[split_name].append(y15)
+            count = int(w15.shape[2])
+            label_indices = (args.window - 1) + np.arange(count) * args.stride
+            label_times = seg["t_vec"][start:end][label_indices] if count else np.zeros(0)
+            split_provenance[split_name]["scene"].extend([seg["scene"]] * count)
+            split_provenance[split_name]["seed"].extend([seg["seed"]] * count)
+            split_provenance[split_name]["drone_id"].extend([seg["drone_id"]] * count)
+            split_provenance[split_name]["segment_id"].extend([seg["segment_id"]] * count)
+            split_provenance[split_name]["label_time"].extend(label_times.tolist())
             report[f"{split_name}_windows"] = int(w15.shape[2])
 
     dataset_15d = {
@@ -280,12 +308,18 @@ def main():
         "te": {"X": concat_windows(split_windows_9["test"], 9, args.window), "Y": concat_labels(split_labels["test"])},
     }
 
-    scipy.io.savemat(str(out_dir / "dataset_15d_train.mat"), {"tr": dataset_15d["tr"]}, do_compression=True)
-    scipy.io.savemat(str(out_dir / "dataset_15d_val.mat"), {"va": dataset_15d["va"]}, do_compression=True)
-    scipy.io.savemat(str(out_dir / "dataset_15d_test.mat"), {"te": dataset_15d["te"]}, do_compression=True)
-    scipy.io.savemat(str(out_dir / "dataset_9d_train.mat"), {"tr": dataset_9d["tr"]}, do_compression=True)
-    scipy.io.savemat(str(out_dir / "dataset_9d_val.mat"), {"va": dataset_9d["va"]}, do_compression=True)
-    scipy.io.savemat(str(out_dir / "dataset_9d_test.mat"), {"te": dataset_9d["te"]}, do_compression=True)
+    for dim, dataset in ((15, dataset_15d), (9, dataset_9d)):
+        for split_name, field in (("train", "tr"), ("val", "va"), ("test", "te")):
+            prov = split_provenance[split_name]
+            payload = dict(dataset[field])
+            payload["provenance"] = {
+                "scene": np.asarray(prov["scene"], dtype=object),
+                "seed": np.asarray(prov["seed"], dtype=object),
+                "drone_id": np.asarray(prov["drone_id"], dtype=np.uint8),
+                "segment_id": np.asarray(prov["segment_id"], dtype=object),
+                "label_time": np.asarray(prov["label_time"], dtype=np.float64),
+            }
+            scipy.io.savemat(str(out_dir / f"dataset_{dim}d_{split_name}.mat"), {field: payload}, do_compression=True)
 
     scipy.io.savemat(
         str(out_dir / "norm_stats_15d.mat"),
@@ -299,6 +333,9 @@ def main():
     )
 
     manifest = {
+        "dataset_id": "formal_5x5_v2",
+        "source_kind": "audited formal 5-scene x 5-seed ROS bag set",
+        "explicitly_not_source": "legacy single-run v2 MAT set",
         "raw_dir": str(raw_dir),
         "out_dir": str(out_dir),
         "window": args.window,
@@ -313,6 +350,7 @@ def main():
             "test": int(dataset_15d["te"]["X"].shape[2]),
         },
         "source_mats": [f.name for f in files],
+        "source_mat_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files},
         "source_sample_counts": sample_counts,
         "train_stats_source_rows": int(x15_train_raw.shape[0]),
         "segments": segment_report,

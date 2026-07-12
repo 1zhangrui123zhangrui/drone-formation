@@ -1,5 +1,0 @@
-key,file,has_net,has_info,has_metadata,train_windows,val_windows,input_dim,output_dim,best_val_loss,final_val_loss,final_train_loss,epochs_logged,best_val_epoch
-c1,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\c1_lstm9d.mat,1,1,1,16471,4381,9,4,0.0393647663295269,0.0472771413624287,0.000398574193241075,2900,2500
-c2,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\c2_lstm15d.mat,1,1,1,16471,4381,15,4,0.0422937124967575,0.0473342388868332,0.000224315765080974,2200,1800
-c3a,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\c3a_bilstm.mat,1,1,1,16471,4381,15,4,0.0596281364560127,0.068480595946312,0.000453669112175703,3100,2700
-c3,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\c3_bidir_attn.mat,1,1,1,16471,4381,15,4,0.146906703710556,0.158939227461815,0.00242062844336033,1500,1100

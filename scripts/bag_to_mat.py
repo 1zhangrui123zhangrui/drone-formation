@@ -21,6 +21,8 @@ bag_to_mat.py — 从 rosbag 提取15维特征向量并保存为 .mat
 """
 import sys
 import argparse
+import hashlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +36,8 @@ def parse_bag(bag_path: str, drone_ids=(1, 2, 3, 4)):
     bag = rosbag.Bag(bag_path, 'r')
 
     raw = {i: {'t_odom': [], 'pos': [], 'vel': [],
-               't_ctrl': [], 'p_des': [], 'v_des': [], 'u_teacher': []}
+               't_p_des': [], 'p_des': [], 't_v_des': [], 'v_des': [],
+               't_cmd': [], 'u_teacher': []}
            for i in drone_ids}
 
     topics = []
@@ -61,13 +64,13 @@ def parse_bag(bag_path: str, drone_ids=(1, 2, 3, 4)):
                                     msg.twist.twist.linear.y,
                                     msg.twist.twist.linear.z])
         elif topic.endswith('p_des'):
-            raw[did]['t_ctrl'].append(ts)
+            raw[did]['t_p_des'].append(ts)
             raw[did]['p_des'].append([msg.point.x, msg.point.y, msg.point.z])
         elif topic.endswith('v_des'):
-            # v_des 和 p_des 同频，只在 p_des 已到位时才追加（防止因话题乱序导致错位）
-            if len(raw[did]['v_des']) < len(raw[did]['t_ctrl']):
-                raw[did]['v_des'].append([msg.vector.x, msg.vector.y, msg.vector.z])
+            raw[did]['t_v_des'].append(ts)
+            raw[did]['v_des'].append([msg.vector.x, msg.vector.y, msg.vector.z])
         elif 'cmd_vel_teacher' in topic:
+            raw[did]['t_cmd'].append(ts)
             raw[did]['u_teacher'].append([msg.linear.x, msg.linear.y, msg.linear.z,
                                           msg.angular.z])
     bag.close()
@@ -77,16 +80,16 @@ def parse_bag(bag_path: str, drone_ids=(1, 2, 3, 4)):
 
     for did in drone_ids:
         r = raw[did]
-        # 取四路数据最短公共长度
-        n = min(len(r['t_ctrl']), len(r['p_des']), len(r['v_des']), len(r['u_teacher']))
-        if n < 5:
-            print(f'  [WARN] drone{did}: only {n} ctrl samples, skipping')
+        if min(len(r['t_p_des']), len(r['t_v_des']), len(r['t_cmd']), len(r['t_odom'])) < 5:
+            print(f'  [WARN] drone{did}: insufficient synchronized topics, skipping')
             continue
 
-        t_ctrl  = np.array(r['t_ctrl'][:n])
-        p_des   = np.array(r['p_des'][:n])     # (n, 3)
-        v_des   = np.array(r['v_des'][:n])     # (n, 3)
-        u_t     = np.array(r['u_teacher'][:n]) # (n, 4)
+        t_p_des = np.asarray(r['t_p_des'])
+        p_des_raw = np.asarray(r['p_des'])
+        t_v_des = np.asarray(r['t_v_des'])
+        v_des_raw = np.asarray(r['v_des'])
+        t_cmd = np.asarray(r['t_cmd'])
+        u_t = np.asarray(r['u_teacher'])
 
         t_odom  = np.array(r['t_odom'])
         pos     = np.array(r['pos'])            # (M, 3)
@@ -96,7 +99,18 @@ def parse_bag(bag_path: str, drone_ids=(1, 2, 3, 4)):
             print(f'  [WARN] drone{did}: no odom data, skipping')
             continue
 
-        # 将 odom（高频）插值到 ctrl 时钟（10Hz）
+        # 只保留所有输入均有真实时间支持的 cmd 主时钟样本，避免端点外推。
+        lower = max(t_p_des[0], t_v_des[0], t_odom[0])
+        upper = min(t_p_des[-1], t_v_des[-1], t_odom[-1])
+        supported = (t_cmd >= lower) & (t_cmd <= upper)
+        t_ctrl = t_cmd[supported]
+        u_t = u_t[supported]
+
+        # 将 desired state 与 odom 插值到 cmd_vel_teacher 主时钟。
+        p_des = np.column_stack([
+            np.interp(t_ctrl, t_p_des, p_des_raw[:, k]) for k in range(3)])
+        v_des = np.column_stack([
+            np.interp(t_ctrl, t_v_des, v_des_raw[:, k]) for k in range(3)])
         p_actual = np.column_stack([
             np.interp(t_ctrl, t_odom, pos[:, k]) for k in range(3)])
         v_actual = np.column_stack([
@@ -153,9 +167,24 @@ def main():
     out = Path(args.out_mat_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    match = re.fullmatch(r"(scene\d{2}_[a-z0-9]+)_(seed\d{2})\.bag", Path(args.bag_path).name)
+    scene = match.group(1) if match else "unknown"
+    seed = match.group(2) if match else "unknown"
+    digest = hashlib.sha256()
+    with open(args.bag_path, "rb") as bag_file:
+        for block in iter(lambda: bag_file.read(1024 * 1024), b""):
+            digest.update(block)
+
     scipy.io.savemat(
         str(out),
-        {'data': data, 'bag_name': str(Path(args.bag_path).name)},
+        {
+            'data': data,
+            'bag_name': str(Path(args.bag_path).name),
+            'scene': scene,
+            'seed': seed,
+            'source_bag': str(Path(args.bag_path).resolve()),
+            'source_bag_sha256': digest.hexdigest(),
+        },
         do_compression=True
     )
     print(f'[bag_to_mat] saved → {out}  ({out.stat().st_size/1024:.0f} KB)')
