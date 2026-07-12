@@ -5,6 +5,7 @@
   <arg name="omega" default="0.2"/>
   <arg name="z_target" default="1.8"/>
   <arg name="teacher_publish_world_cmd" default="true"/>
+  <arg name="motor_enable_wait_sec" default="8.0"/>
 
   <!-- 1. 启动 Gazebo + 4 机 spawn -->
   <include file="$(find drone_sim)/launch/spawn_4drones.launch">
@@ -37,5 +38,6 @@
   <!-- 5. 延时使能电机 (兜底) -->
   <node name="enable_motors_delayed" pkg="drone_sim" type="enable_motors_delayed.py" output="screen">
     <param name="num_drones" value="4"/>
+    <param name="wait_sec" value="$(arg motor_enable_wait_sec)"/>
   </node>
 </launch>

@@ -27,6 +27,7 @@ function run_online_model_controller(modelKey, varargin)
 %   'MaxCmdXY'           : horizontal command saturation (default 2.5)
 %   'MaxCmdZ'            : vertical command saturation (default 1.5)
 %   'MaxCmdYaw'          : yaw-rate command saturation (default 1.5)
+%   'StudentBlend'       : Student share in XYZ command (default 0.10)
 %   'LoopSleepSec'       : polling loop sleep (default 0.01)
 %   'LogPeriodSec'       : status log period (default 3.0)
 
@@ -75,14 +76,18 @@ fprintf('[online] num_drones=%d  warmup_teacher=%d  fallback_invalid=%d\n', ...
     opts.num_drones, opts.warmup_use_teacher, opts.fallback_on_invalid);
 fprintf('[online] student_enable_min_sim_time=%.1fs  cmd_limits=[xy=%.2f z=%.2f yaw=%.2f]\n', ...
     opts.student_enable_min_sim_time, opts.max_cmd_xy, opts.max_cmd_z, opts.max_cmd_yaw);
+fprintf('[online] student_blend=%.2f  yaw_damping_gain=%.2f  safety=[pos_xy=%.2f yaw_rate=%.2f tilt=%.1fdeg]\n', ...
+    opts.student_blend, opts.yaw_damping_gain, opts.safety_max_position_error_xy, ...
+    opts.safety_max_yaw_rate, rad2deg(opts.safety_max_tilt_rad));
 
 while true
     batchDroneIds = zeros(0, 1);
     batchInputs = {};
     batchTeacherCmds = {};
+    batchStates = {};
 
     for droneId = 1:opts.num_drones
-        [raw15, teacher_cmd, pdes_stamp, ready] = collect_inputs(subs, droneId);
+        [raw15, teacher_cmd, state, pdes_stamp, ready] = collect_inputs(subs, droneId);
         if ~ready
             continue;
         end
@@ -95,11 +100,12 @@ while true
         buffers{droneId} = append_feature(buffers{droneId}, raw15, spec.window_length);
 
         [cmd, mode, inputCell, needsPredict] = stage_or_fallback( ...
-            buffers{droneId}, teacher_cmd, pdes_stamp, spec, stats, opts);
+            buffers{droneId}, teacher_cmd, state, pdes_stamp, spec, stats, opts);
         if needsPredict
             batchDroneIds(end+1, 1) = droneId; %#ok<AGROW>
             batchInputs{end+1, 1} = inputCell; %#ok<AGROW>
             batchTeacherCmds{end+1, 1} = teacher_cmd; %#ok<AGROW>
+            batchStates{end+1, 1} = state; %#ok<AGROW>
             continue;
         end
 
@@ -110,7 +116,8 @@ while true
     end
 
     if ~isempty(batchDroneIds)
-        [cmds, modes] = infer_batch_or_fallback(batchInputs, batchTeacherCmds, net, opts);
+        [cmds, modes] = infer_batch_or_fallback( ...
+            batchInputs, batchTeacherCmds, batchStates, net, opts);
         for k = 1:numel(batchDroneIds)
             droneId = batchDroneIds(k);
             if isempty(cmds{k})
@@ -141,6 +148,11 @@ addParameter(parser, 'StudentEnableMinSimTime', 12.0);
 addParameter(parser, 'MaxCmdXY', 2.5);
 addParameter(parser, 'MaxCmdZ', 1.5);
 addParameter(parser, 'MaxCmdYaw', 1.5);
+addParameter(parser, 'StudentBlend', 0.10);
+addParameter(parser, 'YawDampingGain', 0.5);
+addParameter(parser, 'SafetyMaxPositionErrorXY', 1.5);
+addParameter(parser, 'SafetyMaxYawRate', 0.8);
+addParameter(parser, 'SafetyMaxTiltDeg', 25.0);
 addParameter(parser, 'LoopSleepSec', 0.01);
 addParameter(parser, 'LogPeriodSec', 3.0);
 parse(parser, varargin{:});
@@ -153,6 +165,13 @@ opts.student_enable_min_sim_time = double(opts.StudentEnableMinSimTime);
 opts.max_cmd_xy = double(opts.MaxCmdXY);
 opts.max_cmd_z = double(opts.MaxCmdZ);
 opts.max_cmd_yaw = double(opts.MaxCmdYaw);
+opts.student_blend = double(opts.StudentBlend);
+assert(opts.student_blend >= 0.0 && opts.student_blend <= 1.0, ...
+    '[online] StudentBlend must be in [0, 1].');
+opts.yaw_damping_gain = double(opts.YawDampingGain);
+opts.safety_max_position_error_xy = double(opts.SafetyMaxPositionErrorXY);
+opts.safety_max_yaw_rate = double(opts.SafetyMaxYawRate);
+opts.safety_max_tilt_rad = deg2rad(double(opts.SafetyMaxTiltDeg));
 opts.loop_sleep_sec = double(opts.LoopSleepSec);
 opts.log_period_sec = double(opts.LogPeriodSec);
 end
@@ -227,7 +246,7 @@ for droneId = 1:numDrones
 end
 end
 
-function [raw15, teacher_cmd, pdes_stamp, ready] = collect_inputs(subs, droneId)
+function [raw15, teacher_cmd, state, pdes_stamp, ready] = collect_inputs(subs, droneId)
 odom = subs{droneId}.odom.LatestMessage;
 pdes = subs{droneId}.p_des.LatestMessage;
 vdes = subs{droneId}.v_des.LatestMessage;
@@ -235,6 +254,7 @@ teacher = subs{droneId}.teacher.LatestMessage;
 
 raw15 = [];
 teacher_cmd = [];
+state = struct();
 pdes_stamp = NaN;
 ready = false;
 
@@ -268,8 +288,17 @@ teacher_cmd = [
     double(teacher.Linear.Z), ...
     double(teacher.Angular.Z)];
 
+q = odom.Pose.Pose.Orientation;
+[roll, pitch] = quaternion_to_roll_pitch( ...
+    double(q.W), double(q.X), double(q.Y), double(q.Z));
+state.position_error_xy = norm(p_des(1:2) - p_actual(1:2));
+state.omega_z = double(odom.Twist.Twist.Angular.Z);
+state.roll = roll;
+state.pitch = pitch;
+
 raw15 = [p_des, v_des, p_actual, v_actual, teacher_xyz];
-if ~all(isfinite(raw15)) || ~all(isfinite(teacher_cmd))
+if ~all(isfinite(raw15)) || ~all(isfinite(teacher_cmd)) || ...
+        ~all(isfinite([state.position_error_xy, state.omega_z, state.roll, state.pitch]))
     raw15 = [];
     teacher_cmd = [];
     return;
@@ -277,6 +306,13 @@ end
 
 pdes_stamp = stamp_to_sec(pdes.Header.Stamp);
 ready = isfinite(pdes_stamp);
+end
+
+function [roll, pitch] = quaternion_to_roll_pitch(w, x, y, z)
+roll = atan2(2.0 * (w*x + y*z), 1.0 - 2.0 * (x*x + y*y));
+sinPitch = 2.0 * (w*y - z*x);
+sinPitch = max(min(sinPitch, 1.0), -1.0);
+pitch = asin(sinPitch);
 end
 
 function t = stamp_to_sec(stamp)
@@ -298,7 +334,7 @@ if size(buf, 1) > windowLength
 end
 end
 
-function [cmd, mode, inputCell, needsPredict] = stage_or_fallback(buf, teacherCmd, simTime, spec, stats, opts)
+function [cmd, mode, inputCell, needsPredict] = stage_or_fallback(buf, teacherCmd, state, simTime, spec, stats, opts)
 cmd = [];
 mode = "idle";
 inputCell = [];
@@ -316,6 +352,14 @@ if simTime < opts.student_enable_min_sim_time
     if opts.warmup_use_teacher && ~isempty(teacherCmd)
         cmd = teacherCmd;
         mode = "teacher_pre_student_window";
+    end
+    return;
+end
+
+if is_unsafe_state(state, opts)
+    if opts.fallback_on_invalid && ~isempty(teacherCmd)
+        cmd = teacherCmd;
+        mode = "teacher_safety";
     end
     return;
 end
@@ -338,7 +382,7 @@ function windowNorm = normalize_window(window, stats)
 windowNorm = (double(window) - stats.mean) ./ stats.std;
 end
 
-function [cmds, modes] = infer_batch_or_fallback(inputCells, teacherCmds, net, opts)
+function [cmds, modes] = infer_batch_or_fallback(inputCells, teacherCmds, states, net, opts)
 numItems = numel(inputCells);
 cmds = cell(numItems, 1);
 modes = repmat("idle", numItems, 1);
@@ -371,15 +415,32 @@ for i = 1:numItems
     end
 
     cmd = double(cmd(:))';
+    % Full Student takeover is currently not closed-loop stable. Blend its
+    % XYZ output with the stable Teacher command and increase only after a
+    % successful multi-lap validation.
+    alpha = opts.student_blend;
+    cmd(1:3) = teacherCmds{i}(1:3) + ...
+        alpha * (cmd(1:3) - teacherCmds{i}(1:3));
+    % The trained feature set does not contain measured yaw rate, so the
+    % learned fourth output cannot implement Teacher's yaw damping law.
+    % Keep Student control on XYZ and close yaw with measured omega_z.
+    cmd(4) = -opts.yaw_damping_gain * states{i}.omega_z;
     cmdBeforeClip = cmd;
     cmd = clip_command(cmd, opts);
     cmds{i} = cmd;
     if any(abs(cmd - cmdBeforeClip) > 1e-9)
-        modes(i) = "student_clipped";
+        modes(i) = "student_blend_clipped";
     else
-        modes(i) = "student";
-    end
+        modes(i) = "student_blend";
 end
+end
+end
+
+function unsafe = is_unsafe_state(state, opts)
+unsafe = state.position_error_xy > opts.safety_max_position_error_xy || ...
+    abs(state.omega_z) > opts.safety_max_yaw_rate || ...
+    abs(state.roll) > opts.safety_max_tilt_rad || ...
+    abs(state.pitch) > opts.safety_max_tilt_rad;
 end
 
 function Y_pred = normalize_batch_prediction_shape(Y_pred, expectedN)
