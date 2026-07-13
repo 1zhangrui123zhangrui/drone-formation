@@ -1,0 +1,7 @@
+alpha_xy,alpha_z,alpha_r,best_val_loss,artifact
+1,1,1,3.16126279358286e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_1_ar_1\c1_lstm9d\seed_42\model.mat
+1,2,0.5,3.17121048283298e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_2_ar_0.5\c1_lstm9d\seed_42\model.mat
+1,1,0.5,3.19509272230789e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_1_ar_0.5\c1_lstm9d\seed_42\model.mat
+1,4,1,3.20163380820304e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_4_ar_1\c1_lstm9d\seed_42\model.mat
+1,4,0.5,3.23556414514314e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_4_ar_0.5\c1_lstm9d\seed_42\model.mat
+1,2,1,3.27053348883055e-05,\\wsl.localhost\ubuntu-20.04\home\jiuyao\drone-formation-e2e\data\trained_models\weight_tuning\c1_lstm9d_az_2_ar_1\c1_lstm9d\seed_42\model.mat
